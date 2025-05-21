@@ -1,8 +1,8 @@
 import contextlib
 import random
 
-import blendify.cameras
-import blendify.materials.base
+import blendipose.blendify.cameras
+import blendipose.blendify.materials.base
 import blendipose.util as util
 import bpy
 import cameravision
@@ -13,9 +13,9 @@ import simplepyutils as spu
 import trimesh
 import framepump
 from typing import List
-from blendify import scene
-from blendify.colors import TextureColorsViaTempFile, UniformColors, VertexUV
-from blendify.materials import PrincipledBSDFMaterial, PrincipledBSDFWireframeMaterial
+from blendipose.blendify import scene
+from blendipose.blendify.colors import TextureColorsViaTempFile, UniformColors, VertexUV
+from blendipose.blendify.materials import PrincipledBSDFMaterial, PrincipledBSDFWireframeMaterial
 
 
 class Renderer(contextlib.AbstractContextManager):
@@ -314,7 +314,7 @@ def insert_camera_keyframe(camera, frame):
 class BodyMeshCollection:
     def __init__(self, faces, alpha, color=None, motion_blur=True):
         self.faces = faces
-        self.meshes: List[blendify.renderables.Mesh] = []
+        self.meshes: List[blendipose.blendify.renderables.Mesh] = []
         color = (0 / 255, 100 / 255, 255 / 255, alpha)
         self.material = PrincipledBSDFMaterial(
             specular=1,
@@ -481,7 +481,7 @@ def set_cameravision_camera(
     center = camera.intrinsic_matrix[:2, 2] / resolution
 
     blendify_cam = scene.camera
-    if isinstance(blendify_cam, blendify.cameras.PerspectiveCamera) and np.all(
+    if isinstance(blendify_cam, blendipose.blendify.cameras.PerspectiveCamera) and np.all(
         blendify_cam.resolution == resolution
     ):
         # R is the rotation matrix from the world to camera, so we must transpose it
@@ -582,7 +582,7 @@ def poly_to_stencil_trimesh(poly: shapely.Polygon):
         return multipolygon_to_trimesh(stencilpoly)
 
 
-class HoldoutMaterial(blendify.materials.base.Material):
+class HoldoutMaterial(blendipose.blendify.materials.base.Material):
     """A class which manages a Holdout Blender material."""
 
     def __init__(self, use_backface_culling=True):
@@ -590,7 +590,7 @@ class HoldoutMaterial(blendify.materials.base.Material):
 
     def create_material(
         self, name: str = "holdout_material"
-    ) -> blendify.materials.base.MaterialInstance:
+    ) -> blendipose.blendify.materials.base.MaterialInstance:
         object_material = bpy.data.materials.new(name=name)
         object_material.use_nodes = True
         object_material.use_backface_culling = self._use_backface_culling
@@ -610,7 +610,7 @@ class HoldoutMaterial(blendify.materials.base.Material):
         material_output = nodes.get("Material Output")
         links.new(holdout_node.outputs[0], material_output.inputs["Surface"])
 
-        material_instance = blendify.materials.base.MaterialInstance(
+        material_instance = blendipose.blendify.materials.base.MaterialInstance(
             blender_material=object_material,
             inputs={
                 'Color': nodes["Principled BSDF"].inputs["Base Color"],

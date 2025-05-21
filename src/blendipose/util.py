@@ -4,8 +4,8 @@ import os.path as osp
 import cv2
 import numba
 import numpy as np
-from blendify import scene
-from blendify.colors import TextureColors, VertexUV
+from blendipose.blendify import scene
+from blendipose.blendify.colors import TextureColors, VertexUV
 
 
 def add_billboard(

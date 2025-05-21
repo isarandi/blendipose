@@ -2,7 +2,7 @@
 
 This is a Python library for rendering human motion videos, mainly to visualize the output of 3D human pose and shape estimation models. It's similar to my other project [PoseViz](https://github.com/isarandi/poseviz), but optimized for beautiful rendering quality instead of speed.
 
-BlendiPose is built on top of Blender, and the [Blendify](https://github.com/ptrvilya/blendify) package (specifically [my fork of it](https://github.com/isarandi/blendify)).
+BlendiPose is built on top of Blender, and the [Blendify](https://github.com/ptrvilya/blendify) package (specifically my fork of it, which is vendored in this repository).
 
 ## References
 

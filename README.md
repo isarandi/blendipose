@@ -1,6 +1,6 @@
 # BlendiPose
 
-https://github.com/isarandi/blendipose/blob/main/demo_blendipose.mp4
+https://github.com/user-attachments/assets/da37a298-59d2-4306-b39d-4f716cd69d5f
 
 This is a Python library for rendering human motion videos, mainly to visualize the output of 3D human pose and shape estimation models. It's similar to my other project [PoseViz](https://github.com/isarandi/poseviz), but optimized for beautiful rendering quality instead of speed.
 

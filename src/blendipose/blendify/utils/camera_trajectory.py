@@ -18,6 +18,8 @@ class Trajectory:
         self.trajectory = [{k: np.array(v) for k, v in x.items()} for x in keypoints]
 
     def find_closest_kp_in_traj(self, time: float):
+        if len(self.trajectory) == 0:
+            raise ValueError("empty trajectory")
         times = np.array([x['time'] for x in self.trajectory])
         times_diff = times - time
         times_mask = times_diff > 0
@@ -88,16 +90,22 @@ class Trajectory:
         min_pts_for_interp = {"linear": 2, "quadratic": 3, "cubic": 4}
         assert interp_type in min_pts_for_interp.keys(), \
             f"Available interpolations are: {list(min_pts_for_interp.keys())}"
-        if len(self.trajectory) < min_pts_for_interp[interp_type]:
+        # Slerp and interp1d require strictly increasing times, so drop duplicate timestamps
+        all_times = np.array([x['time'] for x in self.trajectory])
+        keep = np.ones(len(all_times), dtype=bool)
+        keep[1:] = np.diff(all_times) > 0
+        trajectory = [kp for kp, k in zip(self.trajectory, keep) if k]
+        if len(trajectory) < min_pts_for_interp[interp_type]:
             print(f'Not enough points for interpolation with "{interp_type}", returning unchanged')
-            return
-        start_time = self.trajectory[0]['time']
-        end_time = self.trajectory[-1]['time']
-        cam_times = [x['time'] for x in self.trajectory]
-        cam_rots = Rotation.from_quat([np.roll(x['quaternion'], -1) for x in self.trajectory])
-        cam_poses = [x['position'] for x in self.trajectory]
+            return self.trajectory
+        start_time = trajectory[0]['time']
+        end_time = trajectory[-1]['time']
+        cam_times = [x['time'] for x in trajectory]
+        cam_rots = Rotation.from_quat([np.roll(x['quaternion'], -1) for x in trajectory])
+        cam_poses = [x['position'] for x in trajectory]
         rot_slerp = Slerp(cam_times, cam_rots)
-        interp_times = np.concatenate([np.arange(start_time, end_time, time_step), [end_time]])
+        n_times = max(2, int(round((end_time - start_time) / time_step)) + 1)
+        interp_times = np.linspace(start_time, end_time, n_times)
         interp_rots = rot_slerp(interp_times)
         pos_intrp = interp1d(cam_times, cam_poses, axis=0, kind=interp_type)
         interp_poses = pos_intrp(interp_times)

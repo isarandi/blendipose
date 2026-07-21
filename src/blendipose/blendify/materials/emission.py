@@ -1,11 +1,13 @@
 import bpy
 
 from .base import Material, MaterialInstance
+from ..compat import bsdf_socket_name
 
 
 class EmissionMaterial(Material):
-    """A class which manages the parameters of GlossyBSDF Blender material.
-    Full docs: https://docs.blender.org/manual/en/latest/render/shader_nodes/shader/glossy.html
+    """A semi-transparent emissive material based on the Principled BSDF shader.
+    The base color is black, alpha is 0.5 and emission strength is 0.5;
+    the "Color" input of the material instance drives the emission color.
     """
 
     def __init__(self, use_backface_culling=True):
@@ -30,27 +32,16 @@ class EmissionMaterial(Material):
         principled_bsdf = material_nodes['Principled BSDF']
         principled_bsdf.inputs['Base Color'].default_value = (0.0, 0.0, 0.0, 1)
         principled_bsdf.inputs['Alpha'].default_value = 0.5
-        principled_bsdf.inputs['Specular'].default_value = 0.0
+        principled_bsdf.inputs[bsdf_socket_name('Specular')].default_value = 0.0
         principled_bsdf.inputs['Emission Strength'].default_value = 0.5
 
-
-        emission_node = material_nodes.new("ShaderNodeEmission")
-        emission_node.inputs['Strength'].default_value = 10.0
-        mix_node = material_nodes.new(type='ShaderNodeMixShader')
-        mix_node.inputs['Fac'].default_value = 0
-
         material_output = material_nodes['Material Output']
-
         links = object_material.node_tree.links
-        links.new(principled_bsdf.outputs['BSDF'], mix_node.inputs[1])
-        links.new(emission_node.outputs['Emission'], mix_node.inputs[2])
-        links.new(mix_node.outputs['Shader'], material_output.inputs['Surface'])
+        links.new(principled_bsdf.outputs['BSDF'], material_output.inputs['Surface'])
 
-        material_instance = MaterialInstance(blender_material=object_material,
-                                      #       inputs={"Color": emission_node.inputs["Color"]})
-                                             inputs={"Color": principled_bsdf.inputs["Emission"]})
+        material_instance = MaterialInstance(
+            blender_material=object_material,
+            inputs={"Color": principled_bsdf.inputs[bsdf_socket_name("Emission")]},
+        )
         return material_instance
 
-    @property
-    def distribution(self):
-        return self._distribution

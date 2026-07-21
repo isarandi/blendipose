@@ -17,34 +17,15 @@ class PointLight(Light):
         color: Vector3d,
         tag: str,
         cast_shadows: bool = True,
-        **kwargs
+        rotation_mode: RotationMode = "quaternionWXYZ",
+        rotation: RotationParams = None,
+        translation: Vector3d = (0, 0, 0),
     ):
-        """Creates PointLight light source in Blender
-
-        Args:
-            strength (float): strength of the light source emitted over the entire area of the light in all directions
-            shadow_soft_size (float): light size for ray shadow sampling (Raytraced shadows) in [0, inf]
-            color (Vector3d): color of the light source
-            cast_shadows (bool, optional): whether the light source casts shadows or not (default: True)
-            rotation_mode (str): type of rotation representation.
-                Can be one of the following:
-                - "quaternionWXYZ" - WXYZ quaternion
-                - "quaternionXYZW" - XYZW quaternion
-                - "rotvec" - axis-angle representation of rotation
-                - "rotmat" - 3x3 rotation matrix
-                - "euler<mode>" - Euler angles with the specified order of rotation, e.g. XYZ, xyz, ZXZ, etc. Refer to scipy.spatial.transform.Rotation.from_euler for details.
-                - "look_at" - look at rotation, the rotation is defined by the point to look at and, optional, the rotation around the forward direction vector (a single float value in tuple or list)
-            rotation (RotationParams): rotation parameters according to the rotation_mode
-                - for "quaternionWXYZ" and "quaternionXYZW" - Vec4d
-                - for "rotvec" - Vec3d
-                - for "rotmat" - Mat3x3
-                - for "euler<mode>" - Vec3d
-                - for "look_at" - Vec3d, Positionable or Tuple[Vec3d/Positionable, float], where float is the rotation around the forward direction vector in degrees
-            translation (Vector3d, optional): translation applied to the Blender object (default: (0,0,0))
-            tag (str): name of the created object in Blender
-        """
         blender_light = self._blender_create_light(tag, "POINT")
-        super().__init__(**kwargs, tag=tag, blender_object=blender_light)
+        super().__init__(
+            tag=tag, blender_object=blender_light,
+            rotation_mode=rotation_mode, rotation=rotation, translation=translation,
+        )
         self.color = color
         self.strength = strength
         self.cast_shadows = cast_shadows
@@ -67,34 +48,15 @@ class DirectionalLight(Light):
         color: Vector3d,
         tag: str,
         cast_shadows: bool = True,
-        **kwargs
+        rotation_mode: RotationMode = "quaternionWXYZ",
+        rotation: RotationParams = None,
+        translation: Vector3d = (0, 0, 0),
     ):
-        """Creates DirectionalLight light source in Blender
-
-        Args:
-            strength (float): strength of the light source in watts per meter squared (W/m^2)
-            angular_diameter (float): angular diameter of the Sun as seen from the Earth in [0, 3.14159]
-            color (Vector3d): color of the light source
-            cast_shadows (bool, optional): whether the light source casts shadows or not (default: True)
-            rotation_mode (str): type of rotation representation.
-                Can be one of the following:
-                - "quaternionWXYZ" - WXYZ quaternion
-                - "quaternionXYZW" - XYZW quaternion
-                - "rotvec" - axis-angle representation of rotation
-                - "rotmat" - 3x3 rotation matrix
-                - "euler<mode>" - Euler angles with the specified order of rotation, e.g. XYZ, xyz, ZXZ, etc. Refer to scipy.spatial.transform.Rotation.from_euler for details.
-                - "look_at" - look at rotation, the rotation is defined by the point to look at and, optional, the rotation around the forward direction vector (a single float value in tuple or list)
-            rotation (RotationParams): rotation parameters according to the rotation_mode
-                - for "quaternionWXYZ" and "quaternionXYZW" - Vec4d
-                - for "rotvec" - Vec3d
-                - for "rotmat" - Mat3x3
-                - for "euler<mode>" - Vec3d
-                - for "look_at" - Vec3d, Positionable or Tuple[Vec3d/Positionable, float], where float is the rotation around the forward direction vector in degrees
-            translation (Vector3d, optional): translation applied to the Blender object (default: (0,0,0))
-            tag (str): name of the created object in Blender
-        """
         blender_light = self._blender_create_light(tag, "SUN")
-        super().__init__(**kwargs, tag=tag, blender_object=blender_light)
+        super().__init__(
+            tag=tag, blender_object=blender_light,
+            rotation_mode=rotation_mode, rotation=rotation, translation=translation,
+        )
         self.color = color
         self.strength = strength
         self.cast_shadows = cast_shadows
@@ -119,39 +81,15 @@ class SpotLight(Light):
         shadow_soft_size: float,
         tag: str,
         cast_shadows: bool = True,
-        **kwargs
+        rotation_mode: RotationMode = "quaternionWXYZ",
+        rotation: RotationParams = None,
+        translation: Vector3d = (0, 0, 0),
     ):
-        """Creates SpotLight light source in Blender
-
-        Args:
-            strength (float): strength of the light source that light would emit over its entire area if
-                it wasn't limited by the spot angle
-            spot_size (float): angle of the spotlight beam in [0.0174533, 3.14159]
-            spot_blend (float): the softness of the spotlight edge in [0, 1]
-            color (Vector3d): color of the light source
-            shadow_soft_size (float): light size for ray shadow sampling (Raytraced shadows) in [0, inf]
-            cast_shadows (bool, optional): whether the light source casts shadows or not (default: True)
-            rotation_mode (str): type of rotation representation.
-                Can be one of the following:
-                - "quaternionWXYZ" - WXYZ quaternion
-                - "quaternionXYZW" - XYZW quaternion
-                - "rotvec" - axis-angle representation of rotation
-                - "rotmat" - 3x3 rotation matrix
-                - "euler<mode>" - Euler angles with the specified order of rotation, e.g. XYZ, xyz, ZXZ, etc. Refer to scipy.spatial.transform.Rotation.from_euler for details.
-                - "look_at" - look at rotation, the rotation is defined by the point to look at and, optional, the rotation around the forward direction vector (a single float value in tuple or list)
-            rotation (RotationParams): rotation parameters according to the rotation_mode
-                - for "quaternionWXYZ" and "quaternionXYZW" - Vec4d
-                - for "rotvec" - Vec3d
-                - for "rotmat" - Mat3x3
-                - for "euler<mode>" - Vec3d
-                - for "look_at" - Vec3d, Positionable or Tuple[Vec3d/Positionable, float], where float is the rotation around the forward direction vector in degrees
-            translation (Vector3d, optional): translation applied to the Blender object (default: (0,0,0))
-            tag (str): name of the created object in Blender
-        """
-        # spot_size: Angle of the spotlight beam (float in [0.0174533, 3.14159]) default 0.785398
-        # spot_blend: The softness of the spotlight edge (float in [0, 1]) default 0.15
         blender_light = self._blender_create_light(tag, "SPOT")
-        super().__init__(**kwargs, tag=tag, blender_object=blender_light)
+        super().__init__(
+            tag=tag, blender_object=blender_light,
+            rotation_mode=rotation_mode, rotation=rotation, translation=translation,
+        )
         self.color = color
         self.strength = strength
         self.spot_size = spot_size

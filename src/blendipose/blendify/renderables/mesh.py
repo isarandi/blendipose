@@ -5,19 +5,17 @@ from typing import TYPE_CHECKING, Sequence
 import bmesh
 import bpy
 import numpy as np
-import itertools
 from .base import RenderableObject
 from ..colors import VertexColors, UniformColors
-from ..internal.types import RotationMode
-from ..colors.base import ColorsList
 from ..colors.texture import VertexUV, FacesUV, UVColors
+from ..internal.types import RotationMode
+from ..materials.base import Material
+
 if TYPE_CHECKING:
     from typing import Union
     from ..colors.base import Colors, ColorsList
     from ..internal.types import Vector3d, RotationParams
     from ..materials.base import MaterialList
-
-from ..materials.base import Material
 
 
 class Mesh(RenderableObject):
@@ -34,25 +32,20 @@ class Mesh(RenderableObject):
             vertices: np.ndarray,
             faces: np.ndarray,
             tag: str,
-            faces_material: Sequence[Sequence[int]] = None,
-            **kwargs
+            material: Union[Material, MaterialList] = None,
+            colors: Union[Colors, ColorsList] = None,
+            faces_material: Sequence[int] = None,
+            rotation_mode: RotationMode = "quaternionWXYZ",
+            rotation: RotationParams = None,
+            translation: Vector3d = (0, 0, 0),
     ):
-        """Creates Blender Object that represent given mesh
-
-        Args:
-            vertices (np.ndarray): mesh vertices
-            faces (np.ndarray): mesh faces
-            material (Union[Material, MaterialList]): Material instance or a list of Material instances
-            colors (Union[Colors, ColorsList]): Colors instance or a list of Colors instances
-            quaternion (Vector4d, optional): rotation applied to Blender object (default: None (identity))
-            translation (Vector3d, optional): translation applied to the Blender object (default: (0,0,0))
-            tag (str): name of the created object in Blender
-            faces_material (np.ndarray, optional): for each face, the material index assigned to it
-        """
         obj = self._blender_create_object(vertices, faces, tag)
         self._faces_material = faces_material
         self._faces_count = len(faces)
-        super().__init__(**kwargs, blender_object=obj, tag=tag)
+        super().__init__(
+            material=material, colors=colors, tag=tag, blender_object=obj,
+            rotation_mode=rotation_mode, rotation=rotation, translation=translation,
+        )
 
     def _blender_create_object(
             self,
@@ -71,6 +64,7 @@ class Mesh(RenderableObject):
         """
         mesh = bpy.data.meshes.new(name=tag)
         mesh.from_pydata(vertices.tolist(), [], faces.tolist())
+        mesh.validate()
         obj = bpy.data.objects.new(tag, mesh)
         bpy.context.collection.objects.link(obj)
         self._blender_mesh = mesh
@@ -82,16 +76,9 @@ class Mesh(RenderableObject):
         Args:
             smooth (bool, optional): If True shade smooth else shade flat (default: True)
         """
-        bpy.context.view_layer.objects.active = self._blender_object
-        bpy.ops.object.mode_set(mode='EDIT')
-        bm = bmesh.from_edit_mesh(self._blender_mesh)
-        for face in bm.faces:
-            face.smooth = smooth
-        bpy.ops.object.mode_set(mode='OBJECT')
-        if smooth:
-            bpy.ops.object.shade_smooth()
-        else:
-            bpy.ops.object.shade_flat()
+        for polygon in self._blender_mesh.polygons:
+            polygon.use_smooth = smooth
+        self._blender_mesh.update()
 
     def _blender_set_colors(
             self,
@@ -111,8 +98,9 @@ class Mesh(RenderableObject):
                 for face in bm.faces:
                     for loop in face.loops:
                         loop[color_layer] = colors.vertex_colors[loop.vert.index]
+                color_layer_name = color_layer.name
                 bpy.ops.object.mode_set(mode='OBJECT')
-                self._blender_mesh.vertex_colors["color"].active_render = True
+                self._blender_mesh.vertex_colors[color_layer_name].active_render = True
             elif isinstance(colors, UVColors):
                 bpy.context.view_layer.objects.active = self._blender_object
                 bpy.ops.object.mode_set(mode='EDIT')
@@ -140,8 +128,10 @@ class Mesh(RenderableObject):
     def _blender_clear_colors(self):
         """Clears Blender color node and erases node constructor
         """
-        for uvl in self._blender_mesh.uv_layers.values():
-            self._blender_mesh.uv_layers.remove(uvl)
+        while self._blender_mesh.uv_layers:
+            self._blender_mesh.uv_layers.remove(self._blender_mesh.uv_layers[0])
+        while self._blender_mesh.vertex_colors:
+            self._blender_mesh.vertex_colors.remove(self._blender_mesh.vertex_colors[0])
         super()._blender_clear_colors()
 
 

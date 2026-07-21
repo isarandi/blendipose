@@ -14,43 +14,27 @@ if TYPE_CHECKING:
 class PerspectiveCamera(Camera):
     def __init__(
         self,
+        resolution: Vector2di = (1920, 1080),
         focal_dist: float = None,
         fov_x: float = None,
         fov_y: float = None,
         center: Vector2d = None,
-        **kwargs
+        near: float = 0.1,
+        far: float = 100,
+        tag: str = 'camera',
+        rotation_mode: RotationMode = "quaternionWXYZ",
+        rotation: RotationParams = None,
+        translation: Vector3d = (0, 0, 0),
     ):
-        """Creates Perspective Camera object in Blender. One of focal_dist, fov_x or fov_y is required to
-        set the camera parameters
-
-        Args:
-            focal_dist (float, optional): Perspective Camera focal distance in millimeters (default: None)
-            fov_x (float, optional): Camera lens horizontal field of view (default: None)
-            fov_y (float, optional): Camera lens vertical field of view (default: None)
-            center (Vector2d, optional): (x, y), horizontal and vertical shifts of the Camera (default: None)
-            resolution (Vector2di): (w, h), the resolution of the resulting image
-            near (float, optional): Camera near clipping distance (default: 0.1)
-            far (float, optional): Camera far clipping distance (default: 100)
-            rotation_mode (str): type of rotation representation.
-                Can be one of the following:
-                - "quaternionWXYZ" - WXYZ quaternion
-                - "quaternionXYZW" - XYZW quaternion
-                - "rotvec" - axis-angle representation of rotation
-                - "rotmat" - 3x3 rotation matrix
-                - "euler<mode>" - Euler angles with the specified order of rotation, e.g. XYZ, xyz, ZXZ, etc. Refer to scipy.spatial.transform.Rotation.from_euler for details.
-                - "look_at" - look at rotation, the rotation is defined by the point to look at and, optional, the rotation around the forward direction vector (a single float value in tuple or list)
-            rotation (RotationParams): rotation parameters according to the rotation_mode
-                - for "quaternionWXYZ" and "quaternionXYZW" - Vec4d
-                - for "rotvec" - Vec3d
-                - for "rotmat" - Mat3x3
-                - for "euler<mode>" - Vec3d
-                - for "look_at" - Vec3d, Positionable or Tuple[Vec3d/Positionable, float], where float is the rotation around the forward direction vector in degrees
-            translation (Vector3d, optional): translation applied to the Blender object (default: (0,0,0))
-            tag (str): name of the created object in Blender
-        """
-        super().__init__(**kwargs)
-        assert not(focal_dist is None and fov_x is None and fov_y is None), \
-            "One of focal_dist, fov_x or fov_y is required"
+        num_given = sum(val is not None for val in (focal_dist, fov_x, fov_y))
+        if num_given == 0:
+            raise ValueError("One of focal_dist, fov_x or fov_y is required")
+        if num_given > 1:
+            raise ValueError("Only one of focal_dist, fov_x or fov_y may be given")
+        super().__init__(
+            resolution=resolution, near=near, far=far, tag=tag,
+            rotation_mode=rotation_mode, rotation=rotation, translation=translation,
+        )
         camera_object = self.blender_camera
         camera_object.data.type = 'PERSP'
         # camera.data.lens_unit = "FOV"
@@ -69,9 +53,7 @@ class PerspectiveCamera(Camera):
 
     @focal_dist.setter
     def focal_dist(self, focal: float):
-        camera = self.blender_camera
-        self._focal_dist = focal
-        camera.data.lens = focal
+        self.blender_camera.data.lens = focal
 
     @property
     def fov_x(self):
@@ -91,24 +73,27 @@ class PerspectiveCamera(Camera):
 
     @property
     def center(self) -> np.ndarray:
+        """Principal point in pixel coordinates (cx, cy)."""
         camera = self.blender_camera
-        ideal_center = (self.resolution - 1.0)/ 2.
-        # Blender's camera shift is relative and bounded by [-2, 2]
-        center_offset_relative = np.array([camera.data.shift_x, camera.data.shift_y])
-        real_center = ideal_center + center_offset_relative * self.resolution
-        return real_center
+        W, H = self.resolution
+        cx = (0.5 - camera.data.shift_x) * W
+        cy = (0.5 + camera.data.shift_y * W / H) * H
+        return np.array([cx, cy])
 
     @center.setter
-    def center(self, real_center: Vector2d):
-        assert np.all(np.array(real_center) >= -2) and np.all(np.array(real_center) <= 2), \
-            ("Blender's camera center is set as a fraction of resolution and "
-             "should be in [-2, 2], got {}").format(real_center)
+    def center(self, center: Vector2d):
+        """Set principal point in pixel coordinates (cx, cy), OpenCV convention.
+
+        Blender shift convention (with sensor_fit='HORIZONTAL'):
+        - shift_x > 0 moves camera RIGHT, objects shift LEFT, so cx decreases
+        - shift_y > 0 moves camera UP, objects shift DOWN (y-down), so cy increases
+        - Both shifts are in units of sensor_width (= resolution width with our setup)
+        """
         camera = self.blender_camera
-        real_center = np.array(real_center)
-        ideal_center = (self.resolution - 1.0) / 2.
-        center_offset_relative = real_center - ideal_center / self.resolution
-        camera.data.shift_x = center_offset_relative[0]
-        camera.data.shift_y = center_offset_relative[1]
+        cx, cy = np.asarray(center, dtype=np.float64)
+        W, H = self.resolution
+        camera.data.shift_x = 0.5 - cx / W
+        camera.data.shift_y = (cy / H - 0.5) * (H / W)
 
     def distance2depth(self, distmap: np.ndarray) -> np.ndarray:
         """Convert map of camera ray lengths (distmap) to map of distances to image plane (depthmap)
@@ -121,8 +106,8 @@ class PerspectiveCamera(Camera):
         """
         img_width, img_height = self.resolution
         cx, cy = self.center
-        offsets_x = np.arange(img_width) - cx
-        offsets_y = np.arange(img_height) - cy
+        offsets_x = np.arange(img_width) + 0.5 - cx
+        offsets_y = np.arange(img_height) + 0.5 - cy
         grid_offsets_x, grid_offsets_y = np.meshgrid(offsets_x, offsets_y)
         depthmap = np.sqrt(distmap ** 2 / ((grid_offsets_x ** 2 + grid_offsets_y ** 2) / (self.focal_dist ** 2) + 1))
         return depthmap
@@ -132,34 +117,19 @@ class PerspectiveCamera(Camera):
 class OrthographicCamera(Camera):
     def __init__(
         self,
+        resolution: Vector2di = (1920, 1080),
         ortho_scale: float = 1.,
-        **kwargs
+        near: float = 0.1,
+        far: float = 100,
+        tag: str = 'camera',
+        rotation_mode: RotationMode = "quaternionWXYZ",
+        rotation: RotationParams = None,
+        translation: Vector3d = (0, 0, 0),
     ):
-        """Creates Orthographic Camera object in Blender
-
-        Args:
-            ortho_scale (float, optional): Orthographic Camera scale (similar to zoom) (default: 1.0)
-            resolution (Vector2di): (w, h), the resolution of the resulting image
-            near (float, optional): Camera near clipping distance (default: 0.1)
-            far (float, optional): Camera far clipping distance (default: 100)
-            rotation_mode (str): type of rotation representation.
-                Can be one of the following:
-                - "quaternionWXYZ" - WXYZ quaternion
-                - "quaternionXYZW" - XYZW quaternion
-                - "rotvec" - axis-angle representation of rotation
-                - "rotmat" - 3x3 rotation matrix
-                - "euler<mode>" - Euler angles with the specified order of rotation, e.g. XYZ, xyz, ZXZ, etc. Refer to scipy.spatial.transform.Rotation.from_euler for details.
-                - "look_at" - look at rotation, the rotation is defined by the point to look at and, optional, the rotation around the forward direction vector (a single float value in tuple or list)
-            rotation (RotationParams): rotation parameters according to the rotation_mode
-                - for "quaternionWXYZ" and "quaternionXYZW" - Vec4d
-                - for "rotvec" - Vec3d
-                - for "rotmat" - Mat3x3
-                - for "euler<mode>" - Vec3d
-                - for "look_at" - Vec3d, Positionable or Tuple[Vec3d/Positionable, float], where float is the rotation around the forward direction vector in degrees
-            translation (Vector3d, optional): translation applied to the Blender object (default: (0,0,0))
-            tag (str): name of the created object in Blender
-        """
-        super().__init__(**kwargs)
+        super().__init__(
+            resolution=resolution, near=near, far=far, tag=tag,
+            rotation_mode=rotation_mode, rotation=rotation, translation=translation,
+        )
         camera_object = self.blender_camera
         camera_object.data.type = 'ORTHO'
         self.ortho_scale = ortho_scale

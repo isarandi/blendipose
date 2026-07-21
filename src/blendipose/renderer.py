@@ -5,7 +5,7 @@ import blendipose.blendify.cameras
 import blendipose.blendify.materials.base
 import blendipose.util as util
 import bpy
-import cameravision
+import deltacamera
 import cv2
 import numpy as np
 import shapely
@@ -55,7 +55,8 @@ class Renderer(contextlib.AbstractContextManager):
         if motion_blur:
             render.use_motion_blur = True
             render.motion_blur_shutter = 0.5
-            cycles.motion_blur_position = 'CENTER'
+            from blendipose.blendify.compat import set_motion_blur_position
+            set_motion_blur_position('CENTER')
 
         util.set_world_up(world_up)
 
@@ -76,7 +77,7 @@ class Renderer(contextlib.AbstractContextManager):
         else:
             self.camera_displays = []
         self.show_image = show_image
-        self.body_meshes = BodyMeshCollection(body_model_faces, body_alpha)
+        self.body_meshes = BodyMeshCollection(body_model_faces, body_alpha, motion_blur=motion_blur)
 
         self.resolution = resolution
         self.fps = out_fps
@@ -85,7 +86,7 @@ class Renderer(contextlib.AbstractContextManager):
         self.view_camera = None
         self.prev_undist_cam = None
 
-        self.set_view_camera(cameravision.Camera.from_fov(55, resolution))
+        self.set_view_camera(deltacamera.Camera.from_fov(55, resolution[::-1]))
         self.frame_background = frame_background
         self.video_writer = framepump.VideoWriter(out_video_path, out_fps, audio_path)
 
@@ -98,6 +99,7 @@ class Renderer(contextlib.AbstractContextManager):
         bpy.context.scene.render.fps = int(round(fps))
         bpy.context.scene.render.fps_base = bpy.context.scene.render.fps / fps
         self.body_meshes.prev_vertices = None
+        self.prev_undist_cam = None
         self.fps = fps
 
     def update(
@@ -121,24 +123,23 @@ class Renderer(contextlib.AbstractContextManager):
         if len(boxes) == 0:
             boxes = np.zeros((0, 4), np.float32)
 
-        if uncerts is not None:
-            vertices = [
-                np.concatenate([v, uncert[..., np.newaxis]], axis=-1)
-                for v, uncert in zip(vertices, uncerts)
-            ]
-        if uncerts_alt is not None:
-            vertices_alt = [
-                np.concatenate([v, uncert[..., np.newaxis]], axis=-1)
-                for v, uncert in zip(vertices_alt, uncerts_alt)
-            ]
+        if uncerts is not None or uncerts_alt is not None:
+            raise NotImplementedError('Uncertainty visualization is not implemented')
+
+        if viz_camera is None:
+            viz_camera = self.view_camera
 
         self.body_meshes.update(vertices, self.fps, colors=colors)
 
-        if self.show_camera:
+        if self.show_camera and camera is not None:
             self.camera_displays[0].update(camera, frame)
 
         if self.depth_of_field:
-            if self.show_image and np.linalg.norm(viz_camera.t - camera.t) < 500:
+            if (
+                self.show_image
+                and camera is not None
+                and np.linalg.norm(viz_camera.t - camera.t) < 500
+            ):
                 focus_distance = None
             elif len(vertices) > 0:
                 focus_distance = np.linalg.norm(np.mean(vertices[0], axis=0) - viz_camera.t) / 1000
@@ -151,11 +152,24 @@ class Renderer(contextlib.AbstractContextManager):
         self.set_view_camera(viz_camera, focus_distance=focus_distance)
         rendered_im = self.render_image()
         if mask is not None:
-            # current_mask = rendered_im[:, :, 3]
-            # current_mask == 1.0
-            rendered_im[:, :, 3] *= mask
+            mask = np.asarray(mask)
+            if np.issubdtype(mask.dtype, np.floating):
+                alpha = rendered_im[:, :, 3].astype(np.float32) * np.clip(mask, 0.0, 1.0)
+                rendered_im[:, :, 3] = (alpha + 0.5).astype(np.uint16)
+            else:
+                mask = mask.astype(np.uint16)
+                if mask.size > 0 and mask.max() > 1:
+                    raise ValueError(
+                        'Integer masks must be binary (0/1) or boolean; '
+                        'pass float masks in [0, 1] for soft masking'
+                    )
+                rendered_im[:, :, 3] *= mask
 
         if self.frame_background:
+            if frame.dtype == np.uint8:
+                frame = frame.astype(np.uint16) * 257
+            elif frame.dtype != np.uint16:
+                raise ValueError(f'Frame must be uint8 or uint16, got {frame.dtype}')
             frame = resize_image(frame, rendered_im.shape, padding_value=65535)
             im_with_bg = util.alpha_blend(rendered_im, frame, dtype=np.uint16)
         else:
@@ -166,7 +180,7 @@ class Renderer(contextlib.AbstractContextManager):
             cv2.imshow('img', cv2.cvtColor(im_show, cv2.COLOR_RGB2BGR))
             cv2.waitKey(1)
 
-        if self.video_writer.is_active():
+        if self.video_writer.accepts_new_frames:
             self.video_writer.append_data(im_with_bg)
 
         return rendered_im, im_with_bg
@@ -181,23 +195,23 @@ class Renderer(contextlib.AbstractContextManager):
         )
         return self.distort_image(undistorted_image)
 
-    def set_view_camera(self, cameravision_camera, focus_distance=None):
-        if False and self.view_camera is not None and self.view_camera.is_equal(cameravision_camera):
+    def set_view_camera(self, deltacamera_camera, focus_distance=None):
+        if False and self.view_camera is not None and self.view_camera.is_equal(deltacamera_camera):
             return
 
         if self.stencil_mesh is not None:
             scene.renderables.remove(self.stencil_mesh)
             self.stencil_mesh = None
 
-        c = cameravision_camera.copy()
+        c = deltacamera_camera.copy()
         if c.has_distortion():
-            undist_cam, box, poly = c.undistort_precise(
-                alpha_balance=1.0, imshape_distorted=self.resolution[::-1], inplace=False
+            undist_cam, box, poly = c.undistorted_with_optimal_intrinsics(
+                alpha_balance=1.0, imshape_distorted=self.resolution[::-1]
             )
             imshape_undistorted = np.ceil(box[2:][::-1]).astype(int)
 
             def distort_fn(image):
-                return cameravision.reproject_image(
+                return deltacamera.reproject_image(
                     image,
                     undist_cam,
                     c,
@@ -206,7 +220,7 @@ class Renderer(contextlib.AbstractContextManager):
                     use_linear_srgb=True,
                     antialias_factor=2,
                     interp=cv2.INTER_CUBIC,
-                )[0]
+                )
 
             self.distort_image = distort_fn
             self._add_holdout_stencil(undist_cam, poly)
@@ -215,7 +229,7 @@ class Renderer(contextlib.AbstractContextManager):
             self.distort_image = lambda x: x
             imshape_undistorted = self.resolution[::-1]
 
-        set_cameravision_camera(
+        set_deltacamera_camera(
             scene,
             undist_cam,
             imshape_undistorted[:2][::-1],
@@ -228,13 +242,13 @@ class Renderer(contextlib.AbstractContextManager):
             insert_camera_keyframe(scene.camera, bpy.context.scene.frame_current + 1)
             if self.prev_undist_cam is not None:
                 undist_cam_extrap = extrapolate(self.prev_undist_cam, undist_cam)
-                set_cameravision_camera(
+                set_deltacamera_camera(
                     scene, undist_cam_extrap, imshape_undistorted[:2][::-1], near=0.1, far=10000
                 )
                 insert_camera_keyframe(scene.camera, bpy.context.scene.frame_current + 2)
             self.prev_undist_cam = undist_cam
 
-        self.view_camera = cameravision_camera.copy()
+        self.view_camera = deltacamera_camera.copy()
 
     def _add_holdout_stencil(self, camera, polygon):
         # Add a flat rectangle in front of the camera, with a cutout for the given polygon
@@ -243,7 +257,8 @@ class Renderer(contextlib.AbstractContextManager):
         # This is useful for avoiding rendering unnecessary parts of the scene
 
         stencil_mesh = poly_to_stencil_trimesh(polygon)
-        vs = camera.image_to_world(stencil_mesh.vertices[:, :2], camera_depth=0.101)
+        # camera_depth is in world units (mm); the near plane is at 0.1 Blender units = 100 mm
+        vs = camera.image_to_world(stencil_mesh.vertices[:, :2], camera_depth=101)
         self.stencil_mesh = scene.renderables.add_mesh(
             util.world_to_blender(vs),
             stencil_mesh.faces,
@@ -251,7 +266,7 @@ class Renderer(contextlib.AbstractContextManager):
             colors=UniformColors((0, 0, 0, 0)),
         )
         self.stencil_mesh.emit_shadows = False
-        self.stencil_mesh._blender_mesh.is_holdout = True
+        self.stencil_mesh._blender_object.is_holdout = True
 
     def _add_ground(self, height):
         texture = np.zeros((20, 20, 3), np.uint8)
@@ -298,16 +313,14 @@ class Renderer(contextlib.AbstractContextManager):
 
 
 def insert_camera_keyframe(camera, frame):
+    from blendipose.blendify.compat import get_fcurves
     camera = camera.blender_camera
     camera.keyframe_insert(data_path="location", frame=frame)
     camera.keyframe_insert(data_path="rotation_quaternion", frame=frame)
     camera.data.keyframe_insert(data_path="lens", frame=frame)
     camera.data.keyframe_insert(data_path="shift_x", frame=frame)
     camera.data.keyframe_insert(data_path="shift_y", frame=frame)
-    for fcurve in [
-        *camera.animation_data.action.fcurves,
-        *camera.data.animation_data.action.fcurves,
-    ]:
+    for fcurve in [*get_fcurves(camera), *get_fcurves(camera.data)]:
         fcurve.keyframe_points[-1].interpolation = 'LINEAR'
 
 
@@ -315,7 +328,7 @@ class BodyMeshCollection:
     def __init__(self, faces, alpha, color=None, motion_blur=True):
         self.faces = faces
         self.meshes: List[blendipose.blendify.renderables.Mesh] = []
-        color = (0 / 255, 100 / 255, 255 / 255, alpha)
+        color = (0 / 255, 100 / 255, 255 / 255, alpha) if color is None else color
         self.material = PrincipledBSDFMaterial(
             specular=1,
             metallic=0.25,
@@ -349,17 +362,28 @@ class BodyMeshCollection:
 
     def update(self, vertices, fps, colors=None):
         if colors is not None:
+            if len(colors) != len(vertices):
+                raise ValueError(
+                    f'Got {len(vertices)} vertex arrays but {len(colors)} colors'
+                )
             for m in self.meshes:
                 scene.renderables.remove(m)
             del self.meshes[:]
             self.meshes += [self._create_mesh(v, c) for v, c in zip(vertices, colors)]
+            self.prev_vertices = None
             return
 
         n_people_new = len(vertices)
         n_people_old = len(self.meshes)
 
         if self.motion_blur:
-            if self.prev_vertices is not None:
+            if (
+                self.prev_vertices is not None
+                and len(self.prev_vertices) == n_people_new
+                and n_people_old == n_people_new
+            ):
+                if fps is None:
+                    raise ValueError('fps must be set when motion_blur is enabled')
                 velocities = [
                     (v - prev_v) * fps for v, prev_v in zip(vertices, self.prev_vertices)
                 ]
@@ -396,15 +420,23 @@ class CameraDisplay:
         self.uv_map = None
 
     def _initial_update(self, camera, frame):
-        self.imshape = frame.shape
-        h, w = frame.shape[:2]
+        if frame is not None:
+            h, w = frame.shape[:2]
+            self.imshape = frame.shape
+        elif camera.image_shape is not None:
+            h, w = camera.image_shape[:2]
+            self.imshape = (h, w)
+        else:
+            raise ValueError(
+                'CameraDisplay needs a frame or a camera with image_shape to size the display'
+            )
         image_corners = np.array([[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]], np.float32)
         image_corners_world = camera.image_to_world(image_corners, camera_depth=self.camera_depth)
         if self.add_campoint:
             vertices = np.array([camera.t, *image_corners_world])
             faces = np.array([[0, 1, 2], [0, 2, 3], [0, 3, 4], [0, 4, 1]])
         else:
-            vertices = np.array([camera.t - camera.R[2] * 0.5, *image_corners_world])
+            vertices = np.array([camera.t - camera.R[2] * 500, *image_corners_world])
             faces = np.array([[0, 1, 2], [0, 2, 3], [0, 3, 4], [0, 4, 1]])
 
         vertices = util.world_to_blender(vertices)
@@ -416,9 +448,11 @@ class CameraDisplay:
             colors=UniformColors((0, 0, 0, 0)),
         )
         self.camera_mesh.emit_shadows = False
-        self.uv_map = VertexUV(np.array([[0, 1], [1, 1], [1, 0], [0, 0]]))
-        self.texture_colors = TextureColorsViaTempFile(frame, self.uv_map, has_alpha=False)
         if self.show_image:
+            if frame is None:
+                raise ValueError('CameraDisplay with show_image=True requires a frame')
+            self.uv_map = VertexUV(np.array([[0, 1], [1, 1], [1, 0], [0, 0]]))
+            self.texture_colors = TextureColorsViaTempFile(frame, self.uv_map, has_alpha=False)
             self.image_mesh = scene.renderables.add_mesh(
                 vertices[1:],
                 faces[:2],
@@ -443,24 +477,26 @@ class CameraDisplay:
         if not self.is_initialized:
             self._initial_update(camera, frame)
 
-        h, w = frame.shape[:2]
+        h, w = frame.shape[:2] if frame is not None else self.imshape[:2]
         image_corners = np.array([[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]], np.float32)
         image_corners_world = camera.image_to_world(image_corners, camera_depth=self.camera_depth)
         vertices = np.array([camera.t, *image_corners_world])
         vertices = util.world_to_blender(vertices)
         self.camera_mesh.update_vertices(vertices)
-        if self.image_mesh is not None:
+        if self.image_mesh is not None and frame is not None:
             self.image_mesh.update_vertices(vertices[1:])
 
             if frame.shape != self.imshape:
                 self.imshape = frame.shape
-                self.texture_colors = TextureColorsViaTempFile(frame, self.uv_map)
+                self.texture_colors = TextureColorsViaTempFile(
+                    frame, self.uv_map, has_alpha=False
+                )
                 self.image_mesh.update_colors(self.texture_colors)
             else:
                 self.texture_colors.update_pixels(frame)
 
 
-def set_cameravision_camera(
+def set_deltacamera_camera(
     scene,
     camera,
     resolution,
@@ -478,7 +514,7 @@ def set_cameravision_camera(
     R = util.CAM_TO_BLENDERCAM_ROTATION_MAT @ camera.R @ util.WORLD_TO_BLENDERWORLD_ROTATION_MAT.T
     t = util.world_to_blender(camera.t)
     f = camera.intrinsic_matrix[0, 0]
-    center = camera.intrinsic_matrix[:2, 2] / resolution
+    center = camera.intrinsic_matrix[:2, 2]
 
     blendify_cam = scene.camera
     if isinstance(blendify_cam, blendipose.blendify.cameras.PerspectiveCamera) and np.all(
@@ -505,12 +541,14 @@ def set_cameravision_camera(
             resolution_percentage=resolution_percentage,
         )
 
+    c = scene.camera.blender_camera
     if focus_distance is not None:
-        c = scene.camera.blender_camera
         c.data.dof.use_dof = True
         c.data.dof.focus_distance = focus_distance
         c.data.dof.aperture_fstop = 30
         c.data.dof.aperture_blades = 3
+    else:
+        c.data.dof.use_dof = False
 
 
 def extrapolate(cam1, cam_mid):
@@ -525,20 +563,17 @@ def extrapolate(cam1, cam_mid):
     fmid = cam_mid.intrinsic_matrix[0, 0]
     f2 = 2 * fmid - f1
 
-    cam2 = cam_mid.copy()
-    cam2.t = t2
-    cam2.R = R2
-
-    cam2.intrinsic_matrix[0, 0] = f2
-    cam2.intrinsic_matrix[1, 1] = f2
-    cam2.intrinsic_matrix[:2, 2] = center2
-    return cam2
+    new_K = cam_mid.intrinsic_matrix.copy()
+    new_K[0, 0] = f2
+    new_K[1, 1] = f2
+    new_K[:2, 2] = center2
+    return cam_mid.copy(rot_world_to_cam=R2, optical_center=t2, intrinsic_matrix=new_K)
 
 
 def resize_image(im, dst_shape, padding_value=255):
     imshape = im.shape[:2]
-    dst_shape = dst_shape[:2]
-    if im.shape == dst_shape:
+    dst_shape = tuple(dst_shape[:2])
+    if imshape == dst_shape:
         return im
 
     interp = cv2.INTER_LINEAR if dst_shape[0] > imshape[0] else cv2.INTER_AREA
@@ -558,7 +593,7 @@ def resize_image(im, dst_shape, padding_value=255):
         padding_left,
         padding_right,
         cv2.BORDER_CONSTANT,
-        value=padding_value,
+        value=(padding_value,) * 4,
     )
     return padded
 

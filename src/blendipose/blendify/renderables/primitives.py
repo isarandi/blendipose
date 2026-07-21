@@ -31,21 +31,20 @@ class MeshPrimitive(RenderableObject):
     @abstractmethod
     def __init__(
         self,
-            faces_material: Sequence[Sequence[int]] = None,
-        **kwargs
+        material: Union[Material, MaterialList],
+        colors: Union[Colors, ColorsList],
+        tag: str,
+        blender_object: bpy.types.Object,
+        faces_material: Sequence[int] = None,
+        rotation_mode: RotationMode = "quaternionWXYZ",
+        rotation: RotationParams = None,
+        translation: Vector3d = (0, 0, 0),
     ):
-        """Passes all arguments to the constructor of the base class
-
-        Args:
-            material (Union[Material, MaterialList]): Material instance or a list of Material instances
-            colors (Union[Colors, ColorsList]): Colors instance or a list of Colors instances
-            blender_object (bpy.types.Object): instance of Blender Object that is wrapped by the class
-            quaternion (Vector4d, optional): rotation applied to the Blender object (default: None (identity))
-            translation (Vector3d, optional): translation applied to the Blender object (default: (0,0,0))
-            tag (str): name of the created object in Blender
-        """
         self._faces_material = faces_material
-        super().__init__(**kwargs)
+        super().__init__(
+            material=material, colors=colors, tag=tag, blender_object=blender_object,
+            rotation_mode=rotation_mode, rotation=rotation, translation=translation,
+        )
 
 
     def _blender_set_colors(self, colors: Union[Colors, ColorsList]):
@@ -61,12 +60,9 @@ class MeshPrimitive(RenderableObject):
         Args:
             smooth (bool): Whether to turn the smooth surface on or off
         """
-        bpy.context.view_layer.objects.active = self._blender_object
-        bpy.ops.object.mode_set(mode='OBJECT')
-        if smooth:
-            bpy.ops.object.shade_smooth()
-        else:
-            bpy.ops.object.shade_flat()
+        for polygon in self._blender_mesh.polygons:
+            polygon.use_smooth = smooth
+        self._blender_mesh.update()
 
     def _blender_assign_materials(self):
         super()._blender_assign_materials()
@@ -103,21 +99,20 @@ class CubeMesh(MeshPrimitive):
         self,
         size: float,
         tag: str,
-        **kwargs
+        material: Union[Material, MaterialList] = None,
+        colors: Union[Colors, ColorsList] = None,
+        faces_material: Sequence[int] = None,
+        rotation_mode: RotationMode = "quaternionWXYZ",
+        rotation: RotationParams = None,
+        translation: Vector3d = (0, 0, 0),
     ):
-        """Creates Blender Object that represent Cube mesh primitive
-
-        Args:
-            size (float): size of a primitive in [0, inf]
-            material (Union[Material, MaterialList]): Material instance or a list of Material instances
-            colors (Union[Colors, ColorsList]): Colors instance or a list of Colors instances
-            quaternion (Vector4d, optional): rotation applied to the Blender object (default: None (identity))
-            translation (Vector3d, optional): translation applied to the Blender object (default: (0,0,0))
-            tag (str): name of the created object in Blender
-        """
         obj = self._blender_create_object(size, tag)
         self._blender_mesh = obj.data
-        super().__init__(**kwargs, blender_object=obj, tag=tag)
+        super().__init__(
+            material=material, colors=colors, tag=tag, blender_object=obj,
+            faces_material=faces_material,
+            rotation_mode=rotation_mode, rotation=rotation, translation=translation,
+        )
 
     def _blender_create_object(
         self,
@@ -138,10 +133,10 @@ class CubeMesh(MeshPrimitive):
         Args:
             colors_list (ColorsList): list of target colors
         """
-        bpy.context.view_layer.objects.active = self._blender_object
-        bpy.ops.object.shade_smooth()
-        # bpy.context.space_data.context = 'MODIFIER'
-        bpy.ops.object.modifier_add(type='EDGE_SPLIT')
+        for polygon in self._blender_mesh.polygons:
+            polygon.use_smooth = True
+        if not any(mod.type == 'EDGE_SPLIT' for mod in self._blender_object.modifiers):
+            self._blender_object.modifiers.new(name='EdgeSplit', type='EDGE_SPLIT')
         super()._blender_set_colors(colors_list)
 
 
@@ -158,25 +153,22 @@ class CircleMesh(MeshPrimitive):
         self,
         radius: float,
         tag: str,
+        material: Union[Material, MaterialList] = None,
+        colors: Union[Colors, ColorsList] = None,
         num_vertices: int = 32,
-        fill_type: str = "NGON",
-        **kwargs
+        fill_type: FillType = "NGON",
+        faces_material: Sequence[int] = None,
+        rotation_mode: RotationMode = "quaternionWXYZ",
+        rotation: RotationParams = None,
+        translation: Vector3d = (0, 0, 0),
     ):
-        """Creates Blender Object that represent Circle mesh primitive
-
-        Args:
-            radius (float): radius of a primitive in [0, inf]
-            material (Union[Material, MaterialList]): Material instance or a list of Material instances
-            colors (Union[Colors, ColorsList]): Colors instance or a list of Colors instances
-            num_vertices (int, optional): number of vertices in primitive in [3, 10000000] (default: 32)
-            fill_type (str, optional): fill type, one of [NOTHING, NGON, TRIFAN] (default: NGON)
-            quaternion (Vector4d, optional): rotation applied to the Blender object (default: None (identity))
-            translation (Vector3d, optional): translation applied to the Blender object (default: (0,0,0))
-            tag (str): name of the created object in Blender
-        """
         obj = self._blender_create_object(num_vertices, radius, fill_type, tag)
         self._blender_mesh = obj.data
-        super().__init__(**kwargs, blender_object=obj, tag=tag)
+        super().__init__(
+            material=material, colors=colors, tag=tag, blender_object=obj,
+            faces_material=faces_material,
+            rotation_mode=rotation_mode, rotation=rotation, translation=translation,
+        )
 
     def _blender_create_object(
         self,
@@ -199,10 +191,10 @@ class CircleMesh(MeshPrimitive):
         Args:
             colors_list (ColorsList): list of target colors
         """
-        bpy.context.view_layer.objects.active = self._blender_object
-        bpy.ops.object.shade_smooth()
-        # bpy.context.space_data.context = 'MODIFIER'
-        bpy.ops.object.modifier_add(type='EDGE_SPLIT')
+        for polygon in self._blender_mesh.polygons:
+            polygon.use_smooth = True
+        if not any(mod.type == 'EDGE_SPLIT' for mod in self._blender_object.modifiers):
+            self._blender_object.modifiers.new(name='EdgeSplit', type='EDGE_SPLIT')
         super()._blender_set_colors(colors_list)
 
 
@@ -220,27 +212,22 @@ class CylinderMesh(MeshPrimitive):
         radius: float,
         height: float,
         tag: str,
+        material: Union[Material, MaterialList] = None,
+        colors: Union[Colors, ColorsList] = None,
         num_vertices: int = 32,
-        fill_type: str = "NGON",
-        **kwargs
+        fill_type: FillType = "NGON",
+        faces_material: Sequence[int] = None,
+        rotation_mode: RotationMode = "quaternionWXYZ",
+        rotation: RotationParams = None,
+        translation: Vector3d = (0, 0, 0),
     ):
-        """Creates Blender Object that represent Cylinder mesh primitive
-
-        Args:
-            radius (float): radius of a primitive in [0, inf]
-            height (float): height of a primitive in [0, inf]
-            material (Union[Material, MaterialList]): Material instance or a list of Material instances
-            colors (Union[Colors, ColorsList]): Colors instance or a list of Colors instances
-            num_vertices (int, optional): number of vertices in primitive in [3, 10000000] (default: 32)
-            fill_type (str, optional): fill type, one of [NOTHING, NGON, TRIFAN] (default: NGON)
-            quaternion (Vector4d, optional): rotation applied to the Blender object (default: None (identity))
-            translation (Vector3d, optional): translation applied to the Blender object (default: (0,0,0))
-            tag (str): name of the created object in Blender
-        """
         obj = self._blender_create_object(num_vertices, radius, height, fill_type, tag)
         self._blender_mesh = obj.data
-        # obj.scale[2] = height / radius
-        super().__init__(**kwargs, blender_object=obj, tag=tag)
+        super().__init__(
+            material=material, colors=colors, tag=tag, blender_object=obj,
+            faces_material=faces_material,
+            rotation_mode=rotation_mode, rotation=rotation, translation=translation,
+        )
 
     def _blender_create_object(
         self,
@@ -264,10 +251,10 @@ class CylinderMesh(MeshPrimitive):
         Args:
             colors_list (ColorsList): list of target colors
         """
-        bpy.context.view_layer.objects.active = self._blender_object
-        bpy.ops.object.shade_smooth()
-        # bpy.context.space_data.context = 'MODIFIER'
-        bpy.ops.object.modifier_add(type='EDGE_SPLIT')
+        for polygon in self._blender_mesh.polygons:
+            polygon.use_smooth = True
+        if not any(mod.type == 'EDGE_SPLIT' for mod in self._blender_object.modifiers):
+            self._blender_object.modifiers.new(name='EdgeSplit', type='EDGE_SPLIT')
         super()._blender_set_colors(colors_list)
 
 
@@ -288,22 +275,20 @@ class PlaneMesh(MeshPrimitive):
             size: float,
             tag: str,
             shadow_catcher: bool = False,
-            **kwargs
+            material: Union[Material, MaterialList] = None,
+            colors: Union[Colors, ColorsList] = None,
+            faces_material: Sequence[int] = None,
+            rotation_mode: RotationMode = "quaternionWXYZ",
+            rotation: RotationParams = None,
+            translation: Vector3d = (0, 0, 0),
     ):
-        """Creates Blender Object that represent Plane mesh primitive
-
-        Args:
-            size (float): size of a primitive in [0, inf]
-            material (Union[Material, MaterialList]): Material instance or a list of Material instances
-            colors (Union[Colors, ColorsList]): Colors instance or a list of Colors instances
-            shadow_catcher (bool, optional): control whether the object will act as a shadow catcher
-            quaternion (Vector4d, optional): rotation applied to the Blender object (default: None (identity))
-            translation (Vector3d, optional): translation applied to the Blender object (default: (0,0,0))
-            tag (str): name of the created object in Blender
-        """
         obj = self._blender_create_object(size, tag, shadow_catcher)
         self._blender_mesh = obj.data
-        super().__init__(**kwargs, blender_object=obj, tag=tag)
+        super().__init__(
+            material=material, colors=colors, tag=tag, blender_object=obj,
+            faces_material=faces_material,
+            rotation_mode=rotation_mode, rotation=rotation, translation=translation,
+        )
 
     def _blender_create_object(
             self,
@@ -333,10 +318,10 @@ class PlaneMesh(MeshPrimitive):
         Args:
             colors_list (ColorsList): list of target colors
         """
-        bpy.context.view_layer.objects.active = self._blender_object
-        bpy.ops.object.shade_smooth()
-        # bpy.context.space_data.context = 'MODIFIER'
-        bpy.ops.object.modifier_add(type='EDGE_SPLIT')
+        for polygon in self._blender_mesh.polygons:
+            polygon.use_smooth = True
+        if not any(mod.type == 'EDGE_SPLIT' for mod in self._blender_object.modifiers):
+            self._blender_object.modifiers.new(name='EdgeSplit', type='EDGE_SPLIT')
         super()._blender_set_colors(colors_list)
 # =============================================== End of Mesh Primitives ===============================================
 
@@ -353,19 +338,18 @@ class ParametricPrimitive(RenderableObject):
     @abstractmethod
     def __init__(
         self,
-        **kwargs
+        material: Union[Material, MaterialList],
+        colors: Union[Colors, ColorsList],
+        tag: str,
+        blender_object: bpy.types.Object,
+        rotation_mode: RotationMode = "quaternionWXYZ",
+        rotation: RotationParams = None,
+        translation: Vector3d = (0, 0, 0),
     ):
-        """Passes all arguments to the constructor of the base class
-
-        Args:
-            material (Material): Material instance
-            colors (UniformColors): UniformColors instance
-            blender_object (bpy.types.Object): instance of Blender Object that is wrapped by the class
-            quaternion (Vector4d, optional): rotation applied to the Blender object (default: None (identity))
-            translation (Vector3d, optional): translation applied to the Blender object (default: (0,0,0))
-            tag (str): name of the created object in Blender
-        """
-        super().__init__(**kwargs)
+        super().__init__(
+            material=material, colors=colors, tag=tag, blender_object=blender_object,
+            rotation_mode=rotation_mode, rotation=rotation, translation=translation,
+        )
 
     def _blender_set_materials(self, material_list: MaterialList):
         if not len(material_list) == 1:
@@ -391,30 +375,26 @@ class EllipsoidNURBS(ParametricPrimitive):
         self,
         radius: Vector3d,
         tag: str,
-        **kwargs
+        material: Union[Material, MaterialList] = None,
+        colors: Union[Colors, ColorsList] = None,
+        rotation_mode: RotationMode = "quaternionWXYZ",
+        rotation: RotationParams = None,
+        translation: Vector3d = (0, 0, 0),
     ):
-        """Creates Blender Object that represent NURBS Surface Sphere primitive with different scales along axis,
-        resulting in Ellipsoid shape
-
-        Args:
-            radius (float): radius of a primitive in [0, inf]
-            material (Material): Material instance
-            colors (UniformColors): UniformColors instance
-            quaternion (Vector4d, optional): rotation applied to the Blender object (default: None (identity))
-            translation (Vector3d, optional): translation applied to the Blender object (default: (0,0,0))
-            tag (str): name of the created object in Blender
-        """
         obj = self._blender_create_object(radius, tag)
-        super().__init__(**kwargs, blender_object=obj, tag=tag)
+        super().__init__(
+            material=material, colors=colors, tag=tag, blender_object=obj,
+            rotation_mode=rotation_mode, rotation=rotation, translation=translation,
+        )
 
     def _blender_create_object(
             self,
             radius: Vector3d,
             tag: str
     ):
-        bpy.ops.surface.primitive_nurbs_surface_sphere_add(radius=radius[0])
+        bpy.ops.surface.primitive_nurbs_surface_sphere_add(radius=1)
         obj = bpy.context.object
-        obj.scale = (np.array(radius) / radius[0]).tolist()
+        obj.scale = np.asarray(radius, dtype=np.float64).tolist()
         obj.name = tag
         return obj
 
@@ -429,19 +409,17 @@ class SphereNURBS(EllipsoidNURBS):
         self,
         radius: float,
         tag: str,
-        **kwargs
+        material: Union[Material, MaterialList] = None,
+        colors: Union[Colors, ColorsList] = None,
+        rotation_mode: RotationMode = "quaternionWXYZ",
+        rotation: RotationParams = None,
+        translation: Vector3d = (0, 0, 0),
     ):
-        """Creates Blender Object that represent NURBS Surface Sphere primitive
-
-        Args:
-            radius (float): radius of a primitive in [0, inf]
-            material (Material): Material instance
-            colors (UniformColors): UniformColors instance
-            quaternion (Vector4d, optional): rotation applied to the Blender object (default: None (identity))
-            translation (Vector3d, optional): translation applied to the Blender object (default: (0,0,0))
-            tag (str): name of the created object in Blender
-        """
-        super().__init__(**kwargs, radius=(radius, radius, radius), tag=tag)
+        super().__init__(
+            radius=(radius, radius, radius), tag=tag,
+            material=material, colors=colors,
+            rotation_mode=rotation_mode, rotation=rotation, translation=translation,
+        )
 
 
 class CurveBezier(ParametricPrimitive):
@@ -455,19 +433,14 @@ class CurveBezier(ParametricPrimitive):
         keypoints: np.ndarray,
         radius: float,
         tag: str,
-        **kwargs
+        material: Union[Material, MaterialList] = None,
+        colors: Union[Colors, ColorsList] = None,
+        rotation_mode: RotationMode = "quaternionWXYZ",
+        rotation: RotationParams = None,
+        translation: Vector3d = (0, 0, 0),
     ):
-        """Creates Blender Object that represent Bezier Curve primitive - a tube passing through the given keypoints
-
-        Args:
-            keypoints (np.ndarray): keypoints for the curve
-            radius (float): radius of a tube in [0, inf]
-            material (Material): Material instance
-            colors (UniformColors): UniformColors instance
-            quaternion (Vector4d, optional): rotation applied to the Blender object (default: None (identity))
-            translation (Vector3d, optional): translation applied to the Blender object (default: (0,0,0))
-            tag (str): name of the created object in Blender
-        """
+        if len(keypoints) < 2:
+            raise ValueError("CurveBezier requires at least 2 keypoints")
         obj = self._blender_create_object(tag)
         obj.data.bevel_depth = radius
         obj.data.bevel_resolution = 4
@@ -477,7 +450,10 @@ class CurveBezier(ParametricPrimitive):
             obj.data.splines[0].bezier_points[ind].co = coords
             obj.data.splines[0].bezier_points[ind].handle_left_type = 'VECTOR'
             obj.data.splines[0].bezier_points[ind].handle_right_type = 'VECTOR'
-        super().__init__(**kwargs, blender_object=obj, tag=tag)
+        super().__init__(
+            material=material, colors=colors, tag=tag, blender_object=obj,
+            rotation_mode=rotation_mode, rotation=rotation, translation=translation,
+        )
 
     def _blender_create_object(
         self,
@@ -485,6 +461,7 @@ class CurveBezier(ParametricPrimitive):
     ):
         bpy.ops.curve.primitive_bezier_curve_add()
         obj = bpy.context.object
+        obj.name = tag
         obj.data.dimensions = '3D'
         obj.data.fill_mode = 'FULL'
         return obj

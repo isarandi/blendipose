@@ -30,16 +30,19 @@ class LightsCollection(metaclass=Singleton):
             None
         """
         world = bpy.context.scene.world
+        if world is None:
+            return
         world.use_nodes = True
         world_tree = world.node_tree
 
         if self._background_light_nodes is not None:
             for node_name in self._background_light_nodes:
                 node = world_tree.nodes.get(node_name)
-                world_tree.nodes.remove(node)
+                if node is not None:
+                    world_tree.nodes.remove(node)
             self._background_light_nodes = None
         else:
-            for node in world_tree.nodes:
+            for node in list(world_tree.nodes):
                 if node.type == 'BACKGROUND':
                     world_tree.nodes.remove(node)
 
@@ -50,25 +53,28 @@ class LightsCollection(metaclass=Singleton):
         Returns:
             None
         """
-        color = np.array(color)
-        assert color.dtype in [np.float32, np.float64], \
-            "Color should be stored as floating point numbers (np.float32 or np.float64)"
+        color = np.asarray(color, dtype=np.float64)
         world = bpy.context.scene.world
+        if world is None:
+            world = bpy.data.worlds.new("World")
+            bpy.context.scene.world = world
         world.use_nodes = True
         world_tree = world.node_tree
 
         self.remove_background_light()
         # Create light node and output node
         bg_node = world_tree.nodes.new(type='ShaderNodeBackground')
+        created_node_names = [bg_node.name]
         for node in world_tree.nodes:
             if node.type == 'OUTPUT_WORLD':
                 output_node = node
                 break
         else:
             output_node = world_tree.nodes.new(type='ShaderNodeOutputWorld')
+            created_node_names.append(output_node.name)
 
         # Set light color
-        if len(color == 3):
+        if len(color) == 3:
             color = (*color, 1.0)
         bg_node.inputs['Color'].default_value = color
 
@@ -77,7 +83,7 @@ class LightsCollection(metaclass=Singleton):
         bg_node.inputs['Strength'].default_value = strength
 
         # Save created nodes to remove them later
-        self._background_light_nodes = [bg_node.name, output_node.name]
+        self._background_light_nodes = created_node_names
 
     def add_point(
             self,
@@ -85,7 +91,7 @@ class LightsCollection(metaclass=Singleton):
             shadow_soft_size: float = 0.25,
             color: Vector3d = (1.0, 1.0, 1.0),
             cast_shadows=True,
-            rotation_mode: str = "quaternionWXYZ",
+            rotation_mode: RotationMode = "quaternionWXYZ",
             rotation: RotationParams = None,
             translation: Vector3d = (0, 0, 0),
             tag=None
@@ -134,7 +140,7 @@ class LightsCollection(metaclass=Singleton):
             angular_diameter: float = 0.00918043,
             color: Vector3d = (1.0, 1.0, 1.0),
             cast_shadows=True,
-            rotation_mode: str = "quaternionWXYZ",
+            rotation_mode: RotationMode = "quaternionWXYZ",
             rotation: RotationParams = None,
             translation: Vector3d = (0, 0, 0),
             tag=None
@@ -142,7 +148,7 @@ class LightsCollection(metaclass=Singleton):
         """Add DirectionalLight light source to the scene
 
         Args:
-            strength (float, optional): strength of the light source in watts per meter squared (W/m^2) (default: 100)
+            strength (float, optional): strength of the light source in watts per meter squared (W/m^2) (default: 10)
             angular_diameter (float, optional): angular diameter of the Sun as seen from the Earth
                 in [0, 3.14159] (default: 0.00918043)
             color (Vector3d, optional): color of the light source (default: (1.0, 1.0, 1.0))
@@ -185,7 +191,7 @@ class LightsCollection(metaclass=Singleton):
             shadow_soft_size: float = 0.25,
             color: Vector3d = (1.0, 1.0, 1.0),
             cast_shadows=True,
-            rotation_mode: str = "quaternionWXYZ",
+            rotation_mode: RotationMode = "quaternionWXYZ",
             rotation: RotationParams = None,
             translation: Vector3d = (0, 0, 0),
             tag=None
@@ -232,12 +238,12 @@ class LightsCollection(metaclass=Singleton):
 
     def add_area(
             self,
-            shape: str,
+            shape: AreaLightShape,
             size: Union[float, Vector2d],
             strength: float = 100,
             color: Vector3d = (1.0, 1.0, 1.0),
             cast_shadows=True,
-            rotation_mode: str = "quaternionWXYZ",
+            rotation_mode: RotationMode = "quaternionWXYZ",
             rotation: RotationParams = None,
             translation: Vector3d = (0, 0, 0),
             tag: str = None
@@ -345,6 +351,8 @@ class LightsCollection(metaclass=Singleton):
         return len(self._lights)
 
     def _reset(self):
+        for light in self._lights.values():
+            light._blender_remove_object()
         self._lights = dict()
         self.remove_background_light()
 

@@ -29,20 +29,20 @@ class Renderable(Positionable):
             self,
             material: Union[Material, MaterialList],
             colors: Union[Colors, ColorsList],
-            **kwargs
+            tag: str,
+            blender_object: BlenderGroup,
+            rotation_mode: RotationMode = "quaternionWXYZ",
+            rotation: RotationParams = None,
+            translation: Vector3d = (0, 0, 0),
     ):
-        """Creates internal structures, calls functions that connect Material and Colors to the object.
-        Can only be called from child classes as the class is abstract.
-
-        Args:
-            material (Union[Material, MaterialList]): Material instance or a list of Material instances
-            colors (Union[Colors, ColorsList]): Colors instance or a list of Colors instances
-            blender_object (bpy.types.Object): instance of Blender Object that is wrapped by the class
-            quaternion (Vector4d, optional): rotation applied to the Blender object (default: None (identity))
-            translation (Vector3d, optional): translation applied to the Blender object (default: (0,0,0))
-            tag (str): name of the created object in Blender
-        """
-        super().__init__(**kwargs)
+        super().__init__(
+            tag=tag, blender_object=blender_object,
+            rotation_mode=rotation_mode, rotation=rotation, translation=translation,
+        )
+        if material is None:
+            raise ValueError("material must not be None; material and colors are required")
+        if colors is None:
+            raise ValueError("colors must not be None; material and colors are required")
         self._materials_count = len(material) if not isinstance(material, Material) else 1
         self.update_material(material)
         self.update_colors(colors)
@@ -71,21 +71,20 @@ class RenderableObject(Renderable):
     @abstractmethod
     def __init__(
             self,
-            **kwargs
+            material: Union[Material, MaterialList],
+            colors: Union[Colors, ColorsList],
+            tag: str,
+            blender_object: BlenderGroup,
+            rotation_mode: RotationMode = "quaternionWXYZ",
+            rotation: RotationParams = None,
+            translation: Vector3d = (0, 0, 0),
     ):
-        """Sets initial values for internal parameters, can only be called from child classes as the class is abstract.
-
-        Args:
-            material (MaterialList): Material instance or a list of Material instances
-            colors (ColorsList): Colors instance or a list of Colors instances
-            blender_object (bpy.types.Object): instance of Blender Object that is wrapped by the class
-            quaternion (Vector4d, optional): rotation applied to the Blender object (default: None (identity))
-            translation (Vector3d, optional): translation applied to the Blender object (default: (0,0,0))
-            tag (str): name of the created object in Blender
-        """
         self._material_instances: Optional[List[MaterialInstance]] = None
         self._colors_metadatas: Optional[List[ColorsMetadata]] = None
-        super().__init__(**kwargs)
+        super().__init__(
+            material=material, colors=colors, tag=tag, blender_object=blender_object,
+            rotation_mode=rotation_mode, rotation=rotation, translation=translation,
+        )
 
     @property
     def emit_shadows(self) -> bool:
@@ -157,12 +156,11 @@ class RenderableObject(Renderable):
         if self._material_instances is not None:
             self._blender_object.active_material = None
             for material_instance in self._material_instances:
-                material_nodes = material_instance.blender_material.node_tree.nodes
                 blender_material = material_instance.blender_material
-                for material_node in material_nodes:
-                    blender_material.node_tree.nodes.remove(material_node)
+                blender_material.node_tree.nodes.clear()
                 blender_material.user_clear()
                 bpy.data.materials.remove(blender_material)
+            self._blender_object.data.materials.clear()
             self._material_instances = None
 
     # ================================================ END OF MATERIAL =================================================
@@ -202,8 +200,9 @@ class RenderableObject(Renderable):
         if self._material_instances is not None and self._colors_metadatas is not None:
             for material_instance, colors_metadata in zip(self._material_instances, self._colors_metadatas):
                 if colors_metadata.type is UniformColors and colors_metadata.has_alpha:
-                    # return the alpha channel back to the default value
-                    material_instance.inputs['Alpha'].default_value = 1.
+                    if 'Alpha' in material_instance.inputs:
+                        # return the alpha channel back to the default value
+                        material_instance.inputs['Alpha'].default_value = 1.
                 blender_material = material_instance.blender_material
                 blender_material.node_tree.nodes.remove(material_instance.colors_node)
                 material_instance.colors_node = None

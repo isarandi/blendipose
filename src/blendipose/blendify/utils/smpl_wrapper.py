@@ -11,7 +11,9 @@ class SMPLWrapper:
         self.device = torch.device(device if device is not None else "cpu")
         self.smpl_root = smpl_root
         self.shape_params = self._preprocess_param(shape_params)
-        self.smpl = smplx.create(self.smpl_root, model_type = 'smpl', gender=gender, betas=self.shape_params).to(self.device)
+        self.smpl = smplx.create(self.smpl_root, model_type='smpl', gender=gender,
+                                 num_betas=self.shape_params.shape[1],
+                                 betas=self.shape_params).to(self.device)
         self.faces = np.array(self.smpl.faces, dtype=np.int64)
 
     @staticmethod

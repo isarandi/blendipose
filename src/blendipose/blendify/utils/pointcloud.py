@@ -1,17 +1,22 @@
-from typing import Union
+from __future__ import annotations
 
-import numpy as np
-import trimesh
-import torch
-import open3d as o3d
-from loguru import logger
-from scipy.spatial import KDTree
+from typing import TYPE_CHECKING
+
 import logging
 import time
 from pathlib import Path
-from skimage.io import imsave
 
-from ..internal.types import Vector3d, Vector4d
+import cv2
+import numpy as np
+import trimesh
+from scipy.spatial import KDTree
+
+logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from typing import Union
+    import open3d as o3d
+    from ..internal.types import Vector3d, Vector4d
 
 
 def estimate_pc_normals_from_mesh(pc_vertices: np.ndarray, mesh: trimesh.base.Trimesh):
@@ -30,7 +35,8 @@ def estimate_pc_normals_from_mesh(pc_vertices: np.ndarray, mesh: trimesh.base.Tr
     dd, nn_index = tree.query(pc_vertices, k=5, p=2, workers=-1)
     pc_normals = mesh_normals[nn_index]
     pc_normals = pc_normals.mean(axis=1)
-    pc_normals = pc_normals / (np.sqrt(pc_normals ** 2).sum(axis=1, keepdims=True))
+    norms = np.linalg.norm(pc_normals, axis=1, keepdims=True)
+    pc_normals = pc_normals / np.maximum(norms, 1e-12)
 
     return pc_normals
 
@@ -96,8 +102,12 @@ def approximate_colors_from_camera(
     # Expand colors if needed
     num_vertices = vertex_normals.shape[0]
     per_vertex_color = np.array(per_vertex_color)
+    if np.issubdtype(per_vertex_color.dtype, np.integer):
+        per_vertex_color = per_vertex_color.astype(np.float64) / 255.
+    else:
+        per_vertex_color = per_vertex_color.astype(np.float64)
     if per_vertex_color.ndim == 1:
-        per_vertex_color = np.repeat(per_vertex_color[np.newaxis], num_vertices, axis=0).astype(np.float32)
+        per_vertex_color = np.repeat(per_vertex_color[np.newaxis], num_vertices, axis=0)
     elif per_vertex_color.ndim == 2:
         assert per_vertex_color.shape[0] == num_vertices, \
             "Length of vertex_colors is to be equal to the number of vertices."
@@ -106,12 +116,8 @@ def approximate_colors_from_camera(
 
     # Add alpha to colors if needed
     if per_vertex_color.shape[1] == 3:
-        per_vertex_color = np.concatenate((per_vertex_color, np.ones((num_vertices, 1), np.float32)), axis=1)
+        per_vertex_color = np.concatenate((per_vertex_color, np.ones((num_vertices, 1), np.float64)), axis=1)
 
-    # Add alpha to support transparent back_color
-    if per_vertex_color.shape[1] == 3:
-        alpha = np.ones((per_vertex_color.shape[0], 1), dtype=np.float32)
-        vertex_colors = np.concatenate((per_vertex_color, alpha), axis=1)
 
     # Compute mask and recolor
     dot_product = (vertex_normals * camera_viewdir[np.newaxis, :]).sum(axis=1)
@@ -122,9 +128,6 @@ def approximate_colors_from_camera(
 
 
 class PCMeshifier:
-    torch_dtype = torch.float32
-    np_dtype = np.float64
-
     def __init__(self, subsampled_mesh_faces_count=1_000_000, texture_resolution=(30_000, 30_000), pc_subsample=None,
             max_query_size=2_000, knn=3, gpu_index=None, bpa_radius=None):
         self.subsampled_mesh_faces_count = subsampled_mesh_faces_count
@@ -134,9 +137,11 @@ class PCMeshifier:
         self.knn = knn
         self.gpu_index = gpu_index
         self.bpa_radius = bpa_radius
+        import torch
         self.device = torch.device(f"cuda:{gpu_index}" if gpu_index is not None else "cpu")
 
     def o3d_mesh_from_pc(self, pc_vertices: np.ndarray, pc_colors: np.ndarray = None, pc_normals: np.ndarray = None):
+        import open3d as o3d
         pcd = o3d.geometry.PointCloud()
         pcd.points = o3d.utility.Vector3dVector(pc_vertices)
         if pc_colors is not None:
@@ -155,7 +160,11 @@ class PCMeshifier:
         if self.bpa_radius is None:
             logger.info("bpa_radius is None, running radius estimation")
             dists = pcd.compute_nearest_neighbor_distance()
-            med_dist = np.median(dists)
+            med_dist = np.median(dists) if len(dists) > 0 else np.nan
+            if not np.isfinite(med_dist) or med_dist <= 0:
+                raise ValueError(
+                    f"Cannot estimate bpa_radius: median nearest-neighbor distance is {med_dist} "
+                    f"(too few points or duplicate points); pass bpa_radius explicitly")
             bpa_radius = med_dist / np.sqrt(2)
             logger.info(f"Estimated radius: {bpa_radius}")
         else:
@@ -194,12 +203,12 @@ class PCMeshifier:
         sq_size = 1. / uv_squares_per_row.astype(np.float64)
 
         triangle_off = np.array([[(0.1, 0.1), (0.1, 0.8), (0.9, 0.1)],
-                                 [(0.9, 0.2), (0.1, 0.9), (0.9, 0.9)]], dtype=self.np_dtype).reshape(1, 6, 2)
+                                 [(0.9, 0.2), (0.1, 0.9), (0.9, 0.9)]], dtype=np.float64).reshape(1, 6, 2)
 
         scaled_triangle_off = triangle_off * sq_size
         faces_offsets = np.stack((np.arange(uv_squares_count) // uv_squares_per_row, np.arange(uv_squares_count) % uv_squares_per_row),
                                  axis=1).astype(
-            self.np_dtype) * sq_size
+            np.float64) * sq_size
         faces_uv = (scaled_triangle_off + faces_offsets[:, None, :]).reshape(uv_squares_count * 2, 3, 2)
         if len(mesh_faces) % 2 == 1:
             faces_uv = faces_uv[:-1]
@@ -207,6 +216,7 @@ class PCMeshifier:
         return faces_uv
 
     def _get_texture_pixels_position_in_3dworld(self, target_texture_coords, mesh_vertices, mesh_faces, uv_map):
+        import torch
         texture_coords_grid = torch.stack([x.reshape(-1) for x in torch.meshgrid(*target_texture_coords, indexing='xy')],
                                           dim=1)  # N,2
         faces_count = len(mesh_faces)
@@ -231,11 +241,15 @@ class PCMeshifier:
         return pix_xyz
 
     def _generate_texture_block(self, target_texture_coords, mesh_vertices, mesh_faces, uv_map, pc_tree, pc_colors):
-        resolution = (len(target_texture_coords[1]), len(target_texture_coords[0]))
+        import torch
+        resolution =(len(target_texture_coords[1]), len(target_texture_coords[0]))
         pix_xyz = self._get_texture_pixels_position_in_3dworld(target_texture_coords, mesh_vertices, mesh_faces, uv_map)
         # Querying KDTree
         dists, inds = pc_tree.query(pix_xyz.cpu().numpy(), k=self.knn, workers=-1)
-        dists = torch.tensor(dists, dtype=self.torch_dtype, device=self.device)
+        if self.knn == 1:
+            dists = dists[:, None]
+            inds = inds[:, None]
+        dists = torch.tensor(dists, dtype=torch.float32, device=self.device)
         inds = torch.tensor(inds, dtype=torch.long, device=self.device)
         # Computing weighed sum
         w = 1. / dists
@@ -251,6 +265,7 @@ class PCMeshifier:
     def generate_texture_from_pc_block_by_block(self, o3d_mesh: o3d.geometry.TriangleMesh, uv_map: np.ndarray, pc_vertices: np.ndarray,
             pc_colors: np.ndarray,
             query_block_size: int = 2000):
+        import torch
 
         if self.pc_subsample is not None and self.pc_subsample < len(pc_vertices):
             logger.info(f"Subsampling the cloud to {self.pc_subsample} pts ({self.pc_subsample / len(pc_vertices) * 100:.2f}%)")
@@ -263,22 +278,25 @@ class PCMeshifier:
             pc_colors = pc_colors.astype(np.float64) / 255.
         pc_colors = pc_colors[:, :3].astype(np.float64).copy()
 
+        if len(pc_vertices) < self.knn:
+            raise ValueError(
+                f"Point cloud has only {len(pc_vertices)} points, "
+                f"but knn={self.knn} neighbors are required")
+
         logger.info("Creating KDTree for texture generation queries")
         pc_tree = KDTree(pc_vertices)
 
         mesh_faces = np.asarray(o3d_mesh.triangles)
         mesh_vertices = np.asarray(o3d_mesh.vertices)
-        faces_count = len(mesh_faces)
-        uv_squares_count = ((faces_count + 1) // 2)
 
         logger.info("Raising data to device")
         mesh_faces_torch = torch.tensor(mesh_faces, device=self.device)
-        mesh_vertices_torch = torch.tensor(mesh_vertices, dtype=self.torch_dtype, device=self.device)
-        uv_map_torch = torch.tensor(uv_map, dtype=self.torch_dtype, device=self.device)
-        pc_colors_torch = torch.tensor(pc_colors, dtype=self.torch_dtype, device=self.device)
+        mesh_vertices_torch = torch.tensor(mesh_vertices, dtype=torch.float32, device=self.device)
+        uv_map_torch = torch.tensor(uv_map, dtype=torch.float32, device=self.device)
+        pc_colors_torch = torch.tensor(pc_colors, dtype=torch.float32, device=self.device)
 
         logger.info("Assigning pixels to faces")
-        texture_coords = [(torch.arange(r, dtype=self.torch_dtype, device=self.device) + 0.5) / r for r in self.texture_resolution]
+        texture_coords = [(torch.arange(r, dtype=torch.float32, device=self.device) + 0.5) / r for r in self.texture_resolution]
         texture_coords[1] = 1 - texture_coords[1]
         texture_coords_splits = [torch.split(tc, query_block_size) for tc in texture_coords]
 
@@ -339,7 +357,8 @@ def meshify_pc(pc_vertices, pc_colors, pc_normals=None, subsampled_mesh_faces_co
     o3d_mesh = meshifier.o3d_mesh_from_pc(pc_vertices, pc_colors, pc_normals)
     dec_mesh = meshifier.o3d_decimate_mesh(o3d_mesh)
     uv_map = meshifier.generate_naive_uvmap(dec_mesh)
-    texture = meshifier.generate_texture_from_pc(dec_mesh, uv_map, pc_vertices, pc_colors)
+    texture = meshifier.generate_texture_from_pc(
+        dec_mesh, uv_map, pc_vertices, pc_colors, query_block_size=max_query_size)
     mesh_vertices = np.asarray(dec_mesh.vertices)
     mesh_faces = np.asarray(dec_mesh.triangles)
     return mesh_vertices, mesh_faces, uv_map, texture
@@ -364,7 +383,8 @@ def meshify_pc_from_file(pc_filepath, output_dir, subsampled_mesh_faces_count=1_
             If None, radius will be estimated automatically based on PC density
     """
 
-    pcd = o3d.io.read_point_cloud(pc_filepath)
+    import open3d as o3d
+    pcd = o3d.io.read_point_cloud(str(pc_filepath))
     pc_vertices = np.asarray(pcd.points)
     pc_colors = np.asarray(pcd.colors)
     pc_normals = np.asarray(pcd.normals)
@@ -376,10 +396,11 @@ def meshify_pc_from_file(pc_filepath, output_dir, subsampled_mesh_faces_count=1_
     o3d_mesh = meshifier.o3d_mesh_from_pc(pc_vertices, pc_colors, pc_normals)
     dec_mesh = meshifier.o3d_decimate_mesh(o3d_mesh)
     uv_map = meshifier.generate_naive_uvmap(dec_mesh)
-    texture = meshifier.generate_texture_from_pc(dec_mesh, uv_map, pc_vertices, pc_colors)
+    texture = meshifier.generate_texture_from_pc(
+        dec_mesh, uv_map, pc_vertices, pc_colors, query_block_size=max_query_size)
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    o3d.io.write_triangle_mesh(output_dir / "mesh.ply", dec_mesh)
-    imsave(output_dir / "texture.jpg", texture, quality=98)
+    o3d.io.write_triangle_mesh(str(output_dir / "mesh.ply"), dec_mesh)
+    cv2.imwrite(str(output_dir / "texture.jpg"), cv2.cvtColor(texture, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 98])
     np.save(output_dir / "uv_map.npy", uv_map)

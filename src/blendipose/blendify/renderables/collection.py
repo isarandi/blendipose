@@ -32,9 +32,9 @@ class RenderablesCollection(metaclass=Singleton):
             material: Material,
             colors: Colors,
             point_size: float = 0.006,
-            base_primitive: str = "CUBE",
+            base_primitive: BasePrimitive = "CUBE",
             particle_emission_strength: int = 1,
-            rotation_mode: str = "quaternionWXYZ",
+            rotation_mode: RotationMode = "quaternionWXYZ",
             rotation: RotationParams = None,
             translation: Vector3d = (0, 0, 0),
             tag: str = None
@@ -90,8 +90,8 @@ class RenderablesCollection(metaclass=Singleton):
             faces: np.ndarray,
             material: Union[Material, MaterialList],
             colors: Union[Colors, ColorsList],
-            faces_material: Sequence[Sequence[int]] = None,
-            rotation_mode: str = "quaternionWXYZ",
+            faces_material: Sequence[int] = None,
+            rotation_mode: RotationMode = "quaternionWXYZ",
             rotation: RotationParams = None,
             translation: Vector3d = (0, 0, 0),
             tag: str = None
@@ -105,7 +105,7 @@ class RenderablesCollection(metaclass=Singleton):
             faces (np.ndarray): mesh faces
             material (Union[Material, MaterialList]): Material instance or list of Material instances
             colors (Union[Colors, ColorsList]): Colors instance or list of Colors instances
-            faces_material (Sequence[Sequence[int]], optional): for each face, the material index assigned to it
+            faces_material (Sequence[int], optional): for each face, the material index assigned to it
             rotation_mode (str): type of rotation representation.
                 Can be one of the following:
                 - "quaternionWXYZ" - WXYZ quaternion
@@ -140,8 +140,8 @@ class RenderablesCollection(metaclass=Singleton):
             size: float,
             material: Union[Material, MaterialList],
             colors: Union[Colors, ColorsList],
-            faces_material: Sequence[Sequence[int]] = None,
-            rotation_mode: str = "quaternionWXYZ",
+            faces_material: Sequence[int] = None,
+            rotation_mode: RotationMode = "quaternionWXYZ",
             rotation: RotationParams = None,
             translation: Vector3d = (0, 0, 0),
             tag: str = None
@@ -153,7 +153,7 @@ class RenderablesCollection(metaclass=Singleton):
             size (float): size of a primitive in [0, inf]
             material (Union[Material, MaterialList]): Material instance or list of Material instances
             colors (Union[Colors, ColorsList]): Colors instance or list of Colors instances
-            faces_material (Sequence[Sequence[int]], optional): for each face, the material index assigned to it
+            faces_material (Sequence[int], optional): for each face, the material index assigned to it
             rotation_mode (str): type of rotation representation.
                 Can be one of the following:
                 - "quaternionWXYZ" - WXYZ quaternion
@@ -188,10 +188,10 @@ class RenderablesCollection(metaclass=Singleton):
             radius: float,
             material: Union[Material, MaterialList],
             colors: Union[Colors, ColorsList],
-            faces_material: Sequence[Sequence[int]] = None,
+            faces_material: Sequence[int] = None,
             num_vertices: int = 32,
-            fill_type: str = "NGON",
-            rotation_mode: str = "quaternionWXYZ",
+            fill_type: FillType = "NGON",
+            rotation_mode: RotationMode = "quaternionWXYZ",
             rotation: RotationParams = None,
             translation: Vector3d = (0, 0, 0),
             tag: str = None
@@ -203,7 +203,7 @@ class RenderablesCollection(metaclass=Singleton):
             radius (float): radius of a primitive in [0, inf]
             material (Union[Material, MaterialList]): Material instance or list of Material instances
             colors (Union[Colors, ColorsList]): Colors instance or list of Colors instances
-            faces_material (Sequence[Sequence[int]], optional): for each face, the material index assigned to it
+            faces_material (Sequence[int], optional): for each face, the material index assigned to it
             num_vertices (int, optional): number of vertices in primitive in [3, 10000000] (default: 32)
             fill_type (str, optional): fill type, one of [NOTHING, NGON, TRIFAN] (default: NGON)
             rotation_mode (str): type of rotation representation.
@@ -241,10 +241,10 @@ class RenderablesCollection(metaclass=Singleton):
             height: float,
             material: Union[Material, MaterialList],
             colors: Union[Colors, ColorsList],
-            faces_material: Sequence[Sequence[int]] = None,
+            faces_material: Sequence[int] = None,
             num_vertices: int = 32,
-            fill_type: str = "NGON",
-            rotation_mode: str = "quaternionWXYZ",
+            fill_type: FillType = "NGON",
+            rotation_mode: RotationMode = "quaternionWXYZ",
             rotation: RotationParams = None,
             translation: Vector3d = (0, 0, 0),
             tag: str = None
@@ -257,7 +257,7 @@ class RenderablesCollection(metaclass=Singleton):
             height (float): height of a primitive in [0, inf]
             material (Union[Material, MaterialList]): Material instance or list of Material instances
             colors (Union[Colors, ColorsList]): Colors instance or list of Colors instances
-            faces_material (Sequence[Sequence[int]], optional): for each face, the material index assigned to it
+            faces_material (Sequence[int], optional): for each face, the material index assigned to it
             num_vertices (int, optional): number of vertices in primitive in [3, 10000000] (default: 32)
             fill_type (str, optional): fill type, one of [NOTHING, NGON, TRIFAN] (default: NGON)
             rotation_mode (str): type of rotation representation.
@@ -294,9 +294,9 @@ class RenderablesCollection(metaclass=Singleton):
             size: float,
             material: Union[Material, MaterialList],
             colors: Union[Colors, ColorsList],
-            faces_material: Sequence[Sequence[int]] = None,
+            faces_material: Sequence[int] = None,
             shadow_catcher: bool = False,
-            rotation_mode: str = "quaternionWXYZ",
+            rotation_mode: RotationMode = "quaternionWXYZ",
             rotation: RotationParams = None,
             translation: Vector3d = (0, 0, 0),
             tag: str = None
@@ -308,7 +308,7 @@ class RenderablesCollection(metaclass=Singleton):
             size (float): size of a plane in [0, inf]
             material (Union[Material, MaterialList]): Material instance or list of Material instances
             colors (Union[Colors, ColorsList]): Colors instance or list of Colors instances
-            faces_material (Sequence[Sequence[int]], optional): for each face, the material index assigned to it
+            faces_material (Sequence[int], optional): for each face, the material index assigned to it
             shadow_catcher (bool, optional): if True, the plane will act as a shadow catcher (default: False)
             rotation_mode (str): type of rotation representation.
                 Can be one of the following:
@@ -347,7 +347,7 @@ class RenderablesCollection(metaclass=Singleton):
             radius: Vector3d,
             material: Material,
             colors: UniformColors,
-            rotation_mode: str = "quaternionWXYZ",
+            rotation_mode: RotationMode = "quaternionWXYZ",
             rotation: RotationParams = None,
             translation: Vector3d = (0, 0, 0),
             tag: str = None
@@ -392,7 +392,7 @@ class RenderablesCollection(metaclass=Singleton):
             radius: float,
             material: Material,
             colors: UniformColors,
-            rotation_mode: str = "quaternionWXYZ",
+            rotation_mode: RotationMode = "quaternionWXYZ",
             rotation: RotationParams = None,
             translation: Vector3d = (0, 0, 0),
             tag: str = None
@@ -438,7 +438,7 @@ class RenderablesCollection(metaclass=Singleton):
             radius: float,
             material: Material,
             colors: UniformColors,
-            rotation_mode: str = "quaternionWXYZ",
+            rotation_mode: RotationMode = "quaternionWXYZ",
             rotation: RotationParams = None,
             translation: Vector3d = (0, 0, 0),
             tag: str = None

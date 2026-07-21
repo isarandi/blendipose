@@ -22,7 +22,7 @@ class Positionable(ABC):
             self,
             tag: str,
             blender_object: BlenderGroup,
-            rotation_mode: str = "quaternionWXYZ",
+            rotation_mode: RotationMode = "quaternionWXYZ",
             rotation: RotationParams = None,
             translation: Vector3d = (0, 0, 0)
     ):
@@ -44,7 +44,7 @@ class Positionable(ABC):
     def tag(self):
         return self._tag
 
-    def _rotation_params_to_quat(self, rotation_mode: str = "quaternionWXYZ", rotation: RotationParams = None):
+    def _rotation_params_to_quat(self, rotation_mode: RotationMode = "quaternionWXYZ", rotation: RotationParams = None):
         """
         Converts rotation parameters to quaternion representation
         Args:
@@ -105,7 +105,7 @@ class Positionable(ABC):
             raise ValueError(f"Unknown rotation mode: {rotation_mode}")
         return result.astype(np.float64)
 
-    def set_position(self, rotation_mode: str = "quaternionWXYZ", rotation: RotationParams = None, translation: Vector3d = None):
+    def set_position(self, rotation_mode: RotationMode = "quaternionWXYZ", rotation: RotationParams = None, translation: Vector3d = None):
         """Sets the position of the object in the scene
         
         Args:
@@ -167,16 +167,32 @@ class Positionable(ABC):
 
     def _blender_remove_object(self):
         """Removes the object from Blender scene"""
+        if self._blender_object is None:
+            return
+        try:
+            _ = self._blender_object.name
+        except ReferenceError:
+            self._blender_object = None
+            return
         bpy.ops.object.select_all(action='DESELECT')
         is_collection = isinstance(self._blender_object, bpy.types.Collection)
         if is_collection:
-            for obj in self._blender_object.all_objects.values():
+            objects = list(self._blender_object.all_objects.values())
+            for obj in objects:
                 obj.select_set(True)
         else:
+            objects = [self._blender_object]
             bpy.context.view_layer.objects.active = self._blender_object
             bpy.ops.object.mode_set(mode='OBJECT')
             self._blender_object.select_set(True)
+        # Remember the datablocks (mesh/camera/light data) to remove them after the objects,
+        # otherwise they linger in bpy.data as orphans
+        datablocks = {}
+        for obj in objects:
+            if obj.data is not None:
+                datablocks[obj.data.as_pointer()] = obj.data
         bpy.ops.object.delete()
+        bpy.data.batch_remove([data for data in datablocks.values() if data.users == 0])
         if is_collection:
             bpy.data.collections.remove(self._blender_object)
         self._blender_object = None

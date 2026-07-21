@@ -20,8 +20,11 @@ class ColorsMetadata(NamedTuple):
 
     def __del__(self):
         if self.texture is not None:
-            if not self.texture.users:
-                bpy.data.images.remove(self.texture)
+            try:
+                if not self.texture.users:
+                    bpy.data.images.remove(self.texture)
+            except (ReferenceError, AttributeError, RuntimeError):
+                pass
 
 
 class Colors(ABC):

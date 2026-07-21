@@ -1,15 +1,12 @@
-from typing import Tuple
-
-import bpy
-
 from .base import Material
 
 
 class WireframeMaterial(Material):
     def __init__(
-        self, wireframe_thickness=0.01, wireframe_color=(0., 0., 0., 1.), **kwargs
+        self, wireframe_thickness=0.01, wireframe_color=(0., 0., 0., 1.),
+        use_backface_culling=False,
     ):
-        super().__init__(**kwargs)
+        super().__init__(use_backface_culling=use_backface_culling)
 
         self._wireframe_thickness = wireframe_thickness
         self._wireframe_color = wireframe_color

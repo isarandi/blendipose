@@ -123,6 +123,12 @@ class TextureColors(UVColors):
         assert texture.ndim == 3 and texture.shape[2] in (3, 4), "Texture must be a 3D array of shape (H, W, 3) or (H, W, 4)"
         assert (texture.shape[0] == self._texture.size[1] and
                 texture.shape[1] == self._texture.size[0]), "Texture shape must match the original texture shape"
+        expected_channels = 4 if self._metadata.has_alpha else 3
+        if texture.shape[2] != expected_channels:
+            raise ValueError(
+                f"Texture channel count mismatch: expected {expected_channels}, "
+                f"got {texture.shape[2]}"
+            )
         if texture.dtype == np.uint8:
             texture = texture.astype(np.float32) / 255.
         last_dim = texture.shape[2]
@@ -215,10 +221,18 @@ class TextureColorsViaTempFile(FileTextureColors):
         super().__init__(self.tempfile.name, uv_map, interpolation, has_alpha)
 
 
-    def update_pixels(self, texture: np.ndarray):
-        _, imbuf = cv2.imencode('.png', cv2.cvtColor(texture, cv2.COLOR_RGB2BGR))
+    def update_pixels(self, texture: np.ndarray, reload: bool = True):
+        if texture.dtype != np.uint8:
+            texture = np.round(texture * 255.0).astype(np.uint8)
+        if texture.ndim == 3 and texture.shape[2] == 4:
+            texture_bgr = cv2.cvtColor(texture, cv2.COLOR_RGBA2BGRA)
+        else:
+            texture_bgr = cv2.cvtColor(texture, cv2.COLOR_RGB2BGR)
+        _, imbuf = cv2.imencode('.png', texture_bgr)
         self.tempfile.seek(0)
         self.tempfile.write(memoryview(imbuf))
         self.tempfile.truncate()
         self.tempfile.flush()
-        #self._texture.reload() # apparently this is not necessary?
+        # During __init__ the file is written before the Blender image is loaded
+        if reload and getattr(self, '_texture', None) is not None:
+            self._texture.reload()

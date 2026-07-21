@@ -98,7 +98,7 @@ def add_billboard(
 
 
 def resize_image(im, dst_shape):
-    if im.shape[:2] == dst_shape[:2]:
+    if im.shape[:2] == tuple(dst_shape[:2]):
         return im
     interp = cv2.INTER_LINEAR if dst_shape[0] > im.shape[0] else cv2.INTER_AREA
     return cv2.resize(im, (dst_shape[1], dst_shape[0]), interpolation=interp)
@@ -115,7 +115,7 @@ def replace_extension(path, new_ext):
 
 
 @functools.lru_cache
-@numba.njit(error_model='numpy', cache=True)
+@numba.njit(error_model='numpy', cache=True, parallel=True)
 def get_srgb_decoder_lut(encoded_dtype=np.uint8):
     maxval = np.iinfo(encoded_dtype).max
     length = int(maxval) + 1
@@ -130,15 +130,15 @@ def get_srgb_decoder_lut(encoded_dtype=np.uint8):
             lut[i] = 0
         elif lut[i] > 1:
             lut[i] = 1
-    return (lut * (1 << 16 - 1)).astype(np.uint16)
+    return (lut * ((1 << 16) - 1) + 0.5).astype(np.uint16)
 
 
 @functools.lru_cache
-@numba.njit(error_model='numpy', cache=True)
+@numba.njit(error_model='numpy', cache=True, parallel=True)
 def get_srgb_encoder_lut(encoded_dtype=np.uint8):
     lut = np.zeros(1 << 16, np.float64)
     for i in numba.prange(1 << 16):
-        x = i / (1 << 16 - 1)
+        x = i / ((1 << 16) - 1)
         if x <= 0.0031308:
             lut[i] = x * 12.92
         else:
@@ -149,14 +149,28 @@ def get_srgb_encoder_lut(encoded_dtype=np.uint8):
             lut[i] = 1
 
     maxval = np.iinfo(encoded_dtype).max
-    return (lut * maxval).astype(encoded_dtype)
+    return (lut * maxval + 0.5).astype(encoded_dtype)
 
 
-def alpha_blend(overlay_rgba, background=255, use_srgb_lut=True, dst=None, dtype=np.uint8):
+def alpha_blend(overlay_rgba, background=None, use_srgb_lut=True, dst=None, dtype=np.uint8):
+    dtype = np.dtype(dtype).type
+    if overlay_rgba.dtype != dtype:
+        raise ValueError(
+            f'overlay_rgba has dtype {overlay_rgba.dtype}, expected {np.dtype(dtype)}'
+        )
+    if background is None:
+        background = np.iinfo(dtype).max
     if np.isscalar(background):
         background = np.array([background, background, background], dtype)
     else:
-        background = np.asarray(background, dtype)
+        background = np.asarray(background)
+        if background.dtype != dtype:
+            raise ValueError(
+                f'background has dtype {background.dtype}, expected {np.dtype(dtype)}'
+            )
+
+    if dst is None:
+        dst = np.empty((overlay_rgba.shape[0], overlay_rgba.shape[1], 3), dtype)
 
     if background.ndim == 1:
         if use_srgb_lut:
@@ -184,11 +198,8 @@ def alpha_blend(overlay_rgba, background=255, use_srgb_lut=True, dst=None, dtype
             return _alpha_blend_nolut(overlay_rgba, background, dst, dtype)
 
 
-@numba.njit(error_model='numpy', cache=True)
-def _alpha_blend(overlay_rgba, im, srgb_encoder_lut, srgb_decoder_lut, dst=None, dtype=np.uint8):
-    if dst is None:
-        dst = np.empty((overlay_rgba.shape[0], overlay_rgba.shape[1], 3), dtype)
-
+@numba.njit(error_model='numpy', cache=True, parallel=True)
+def _alpha_blend(overlay_rgba, im, srgb_encoder_lut, srgb_decoder_lut, dst, dtype=np.uint8):
     rgba_flat = overlay_rgba.reshape(-1, 4)
     rgb_flat = im.reshape(-1, 3)
     dst_flat = dst.reshape(-1, 3)
@@ -209,17 +220,14 @@ def _alpha_blend(overlay_rgba, im, srgb_encoder_lut, srgb_decoder_lut, dst=None,
             elif combined_linear > 65535:
                 combined_linear = 65535
 
-            dst_flat[i, c] = srgb_encoder_lut[np.uint16(combined_linear)]
+            dst_flat[i, c] = srgb_encoder_lut[np.uint16(np.rint(combined_linear))]
     return dst
 
 
-@numba.njit(error_model='numpy', cache=True)
+@numba.njit(error_model='numpy', cache=True, parallel=True)
 def _alpha_blend_singlecolor(
-    overlay_rgba, color, srgb_encoder_lut, srgb_decoder_lut, dst=None, dtype=np.uint8
+    overlay_rgba, color, srgb_encoder_lut, srgb_decoder_lut, dst, dtype=np.uint8
 ):
-    if dst is None:
-        dst = np.empty((overlay_rgba.shape[0], overlay_rgba.shape[1], 3), dtype)
-
     rgba_flat = overlay_rgba.reshape(-1, 4)
     rgb_linear2_float = srgb_decoder_lut[color].astype(np.float32)
     dst_flat = dst.reshape(-1, 3)
@@ -238,15 +246,12 @@ def _alpha_blend_singlecolor(
             elif combined_linear > 65535:
                 combined_linear = 65535
 
-            dst_flat[i, c] = srgb_encoder_lut[np.uint16(combined_linear)]
+            dst_flat[i, c] = srgb_encoder_lut[np.uint16(np.rint(combined_linear))]
     return dst
 
 
-@numba.njit(error_model='numpy', cache=True)
-def _alpha_blend_singlecolor_nolut(overlay_rgba, color, dst=None, dtype=np.uint8):
-    if dst is None:
-        dst = np.empty((overlay_rgba.shape[0], overlay_rgba.shape[1], 3), dtype)
-
+@numba.njit(error_model='numpy', cache=True, parallel=True)
+def _alpha_blend_singlecolor_nolut(overlay_rgba, color, dst, dtype=np.uint8):
     rgba_flat = overlay_rgba.reshape(-1, 4)
     rgb2_float = color.astype(np.float32)
     dst_flat = dst.reshape(-1, 3)
@@ -262,15 +267,12 @@ def _alpha_blend_singlecolor_nolut(overlay_rgba, color, dst=None, dtype=np.uint8
                 combined = 0
             elif combined > maxval:
                 combined = maxval
-            dst_flat[i, c] = dtype(combined)
+            dst_flat[i, c] = dtype(np.rint(combined))
     return dst
 
 
-@numba.njit(error_model='numpy', cache=True)
-def _alpha_blend_nolut(overlay_rgba, im, dst=None, dtype=np.uint8):
-    if dst is None:
-        dst = np.empty((overlay_rgba.shape[0], overlay_rgba.shape[1], 3), dtype)
-
+@numba.njit(error_model='numpy', cache=True, parallel=True)
+def _alpha_blend_nolut(overlay_rgba, im, dst, dtype=np.uint8):
     rgba_flat = overlay_rgba.reshape(-1, 4)
     rgb_flat = im.reshape(-1, 3)
     dst_flat = dst.reshape(-1, 3)
@@ -294,7 +296,7 @@ def _alpha_blend_nolut(overlay_rgba, im, dst=None, dtype=np.uint8):
 
 MM_TO_UNIT = 1 / 1000
 UNIT_TO_MM = 1000
-WORLD_UP = np.array([0, 0, 1])
+WORLD_UP = np.array([0, -1, 0])
 WORLD_TO_BLENDERWORLD_ROTATION_MAT = np.array([[1, 0, 0], [0, 0, 1], [0, -1, 0]], dtype=np.float32)
 
 # Our convention follows OpenCV, where x is right, y is down, and z is forward
@@ -305,14 +307,14 @@ CAM_TO_BLENDERCAM_ROTATION_MAT = np.array([[1, 0, 0], [0, -1, 0], [0, 0, -1]], d
 def rotation_mat(up):
     up = unit_vector(up)
     rightlike = np.array([1, 0, 0])
-    if np.allclose(up, rightlike):
+    if np.allclose(np.abs(np.dot(up, rightlike)), 1):
         rightlike = np.array([0, 1, 0])
 
     forward = unit_vector(np.cross(up, rightlike))
     right = np.cross(forward, up)
 
     # In Blender, the world coordinate system is right-handed, with z pointing up
-    return np.row_stack([right, forward, up])
+    return np.stack([right, forward, up])
 
 
 def unit_vector(vectors, axis=-1):

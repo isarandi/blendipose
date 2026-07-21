@@ -23,7 +23,7 @@ dependencies = [
     'opencv-python',
     'shapely',
     'trimesh',
-    'cameravision',
+    'deltacamera',
     'simplepyutils',
     'framepump',
     'scipy',

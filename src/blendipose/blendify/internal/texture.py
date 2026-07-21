@@ -27,6 +27,11 @@ import bpy
 
 
 def compute_particle_color_texture(colors, name="ParticleColor"):
+    if len(colors) == 0:
+        raise ValueError("Cannot create a color texture from an empty list of colors")
+    old_image = bpy.data.images.get(name)
+    if old_image is not None:
+        bpy.data.images.remove(old_image)
     # To view the texture we set the height of the texture to vis_image_height
     image = bpy.data.images.new(name=name, width=len(colors), height=1)
 

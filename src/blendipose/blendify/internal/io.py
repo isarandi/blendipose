@@ -19,7 +19,7 @@ class catch_stdout:
     def _check_if_hook_possible(self):
         try:
             sys.stdout.fileno()
-        except UnsupportedOperation:
+        except (UnsupportedOperation, AttributeError):
             return False
         return True
 
@@ -45,11 +45,9 @@ class catch_stdout:
     def release_hook(self):
         if self.skip:
             return
-        os.close(self.stdout_fd)
         os.dup2(self.saved_stdout_fd, self.stdout_fd)
         os.close(self.saved_stdout_fd)
         if self.capture_internal_stdout:
-            os.close(self.internal_stdout_fd)
             os.dup2(self.saved_internal_stdout_fd, self.internal_stdout_fd)
             os.close(self.saved_internal_stdout_fd)
         self.logfile.close()

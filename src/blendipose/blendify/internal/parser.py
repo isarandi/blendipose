@@ -12,11 +12,11 @@ def move_collection(parent, collection):
     # from https://blender.stackexchange.com/questions/157828/how-to-duplicate-a-certain-collection-using-python
     def _move_collection(parent, collection):
         # re-link objects
-        for o in collection.objects:
+        for o in list(collection.objects):
             collection.objects.unlink(o)
             parent.objects.link(o)
 
-        for c in collection.children:
+        for c in list(collection.children):
             # Create child and link it
             cc = bpy.data.collections.new(c.name)
             parent.children.link(cc)
@@ -28,7 +28,7 @@ def move_collection(parent, collection):
             # Recursively move everything that is inside
             _move_collection(cc, c)
 
-        for c in collection.children:
+        for c in list(collection.children):
             bpy.data.collections.remove(c, do_unlink=True)
 
     _move_collection(parent, collection)
@@ -87,12 +87,12 @@ def parse_camera_from_blendfile(obj: bpy.types.Object, resolution: np.ndarray):
 
         # determine fov
         if sensor_fit == "HORIZONTAL":
-            if obj.data.lens_unit == "MILLETERS":
+            if obj.data.lens_unit == "MILLIMETERS":
                 fov_x = 2 * math.atan(0.5 * obj.data.sensor_width / obj.data.lens)
             else:
                 fov_x = obj.data.angle_x
         else:  # VERTICAL
-            if obj.data.lens_unit == "MILLETERS":
+            if obj.data.lens_unit == "MILLIMETERS":
                 fov_y = 2 * math.atan(0.5 * obj.data.sensor_height / obj.data.lens)
             else:
                 fov_y = obj.data.angle_y
@@ -100,9 +100,12 @@ def parse_camera_from_blendfile(obj: bpy.types.Object, resolution: np.ndarray):
         camera_dict["fov_y"] = fov_y
 
         # center
-        ideal_center = resolution / 2.
-        center_offset = np.array([obj.data.shift_x, obj.data.shift_y])
-        camera_dict["center"] = ideal_center / resolution - center_offset
+        camera_dict["center"] = np.array(
+            [
+                (0.5 - obj.data.shift_x) * resolution[0],
+                (0.5 + obj.data.shift_y * resolution[0] / resolution[1]) * resolution[1],
+            ]
+        )
 
         # near / far
         camera_dict["near"] = obj.data.clip_start
@@ -135,7 +138,7 @@ def parse_light_from_blendfile(obj: bpy.types.Object):
         light_dict["shadow_soft_size"] = obj.data.shadow_soft_size
     elif light_type == "AREA":
         light_dict["shape"] = obj.data.shape.lower()
-        if light_dict["shape"] in ["RECTANGLE", "ELLIPSE"]:
+        if light_dict["shape"] in ["rectangle", "ellipse"]:
             light_dict["size"] = np.array([obj.data.size, obj.data.size_y], dtype=np.float32)
         else:
             light_dict["size"] = obj.data.size

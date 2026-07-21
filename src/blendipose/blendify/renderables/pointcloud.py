@@ -68,28 +68,15 @@ class PointCloud(Renderable):
             self,
             vertices: np.ndarray,
             tag: str,
+            material: Material = None,
+            colors: Colors = None,
             point_size: float = 0.006,
-            base_primitive: str = "CUBE",
+            base_primitive: BasePrimitive = "CUBE",
             particle_emission_strength: int = 1,
-            **kwargs
+            rotation_mode: RotationMode = "quaternionWXYZ",
+            rotation: RotationParams = None,
+            translation: Vector3d = (0, 0, 0),
     ):
-        """Creates Blender Collection that represent given point cloud. Code for creation particle systems for
-        representing the point clouds is borrowed from https://github.com/SBCV/Blender-Addon-Photogrammetry-Importer
-
-        Args:
-            vertices (np.ndarray): point cloud vertices
-            material (Material): Material instance
-            colors (Colors): VertexColors or UniformColors instance
-            point_size (float, optional): size of a primitive, representing each vertex (default: 0.006)
-            base_primitive (str, optional): type of primitive for representing each point
-                (possible values are PLANE, CUBE, SPHERE, default: CUBE)
-            particle_emission_strength (int, optional): strength of the emission from each primitive. This is used to
-                increase realism. Values <= 0 turn emission off, values > 0 set the power of emission (default: 1)
-            quaternion (Vector4d, optional): rotation applied to the Blender object (default: None (identity))
-            translation (Vector3d, optional): translation applied to the Blender object (default: (0,0,0))
-            tag (str): name of the created collection in Blender
-        """
-
         # internal variables and constants
         # This is a constraint imposed by open bug in blender https://developer.blender.org/T81103
         self._max_particles: int = 10000
@@ -105,7 +92,10 @@ class PointCloud(Renderable):
         self._colors_metadata: Optional[ColorsMetadata] = None
 
         collection = self._blender_create_collection(vertices, tag)
-        super().__init__(**kwargs, blender_object=collection, tag=tag)
+        super().__init__(
+            material=material, colors=colors, tag=tag, blender_object=collection,
+            rotation_mode=rotation_mode, rotation=rotation, translation=translation,
+        )
 
     def update_vertices(
             self,
@@ -122,30 +112,29 @@ class PointCloud(Renderable):
             points_subset = vertices[offset: offset + self._max_particles]
 
             # update PC object
-            pc_object = self._blender_object.all_objects[f"Particle_{subset_ind}_PC"]
-            for vert_ind, vert in enumerate(pc_object.vertices):
-                vert.co = points_subset[vert_ind]
-            pc_object.update()
+            pc_object = self._blender_object.all_objects[f"{self.tag}_Particle_{subset_ind}_PC"]
+            pc_object.data.vertices.foreach_set("co", points_subset.ravel())
+            pc_object.data.update()
 
     # Getter and setter for emit_shadow: this property may be turned off if the particle_emission_strength
     # is big enough to avoid artifacts.
     @property
-    def emit_shadow(self):
+    def emit_shadows(self):
         val = None
         for particle_obj_name in self._particle_metadata.keys():
             particle_obj = self._blender_object.all_objects[particle_obj_name]
-            curr_val = particle_obj.cycles_visibility.shadow
+            curr_val = particle_obj.visible_shadow
             if val is None:
                 val = curr_val
             elif val != curr_val:
                 return None
         return val
 
-    @emit_shadow.setter
-    def emit_shadow(self, val: bool):
+    @emit_shadows.setter
+    def emit_shadows(self, val: bool):
         for particle_obj_name in self._particle_metadata.keys():
             particle_obj = self._blender_object.all_objects[particle_obj_name]
-            particle_obj.cycles_visibility.shadow = val
+            particle_obj.visible_shadow = val
 
     # ===================================================== OBJECT =====================================================
     def _blender_create_collection(
@@ -169,10 +158,10 @@ class PointCloud(Renderable):
         self.num_vertices = len(vertices)
         for index, vertex_start in enumerate(range(0, self.num_vertices, self._max_particles)):
             # This name is used is a unique identifier for
-            # the internal dictionary with metadata self._particle_metadata
-            particle_obj_name = f"Particle_{index}"
-            # particle_material_name = f"Particle_{index}_Material"
-            point_cloud_obj_name = f"Particle_{index}_PC"
+            # the internal dictionary with metadata self._particle_metadata;
+            # it is prefixed with the tag because Blender object names are globally unique
+            particle_obj_name = f"{tag}_Particle_{index}"
+            point_cloud_obj_name = f"{tag}_Particle_{index}_PC"
 
             self._point_cloud_object_names.append(point_cloud_obj_name)
             points_subset = vertices[vertex_start: vertex_start + self._max_particles]
@@ -203,9 +192,28 @@ class PointCloud(Renderable):
     def _blender_remove_object(self):
         """Removes the object from Blender scene
         """
+        particle_settings = []
+        meshes = []
+        for obj in self._blender_object.all_objects.values():
+            for particle_system in obj.particle_systems:
+                particle_settings.append(particle_system.settings)
+            if isinstance(obj.data, bpy.types.Mesh):
+                meshes.append(obj.data)
         self._blender_clear_colors()
         self._blender_clear_material()
         super()._blender_remove_object()
+        for settings in particle_settings:
+            try:
+                if settings.users == 0:
+                    bpy.data.particles.remove(settings)
+            except ReferenceError:
+                pass
+        for mesh in meshes:
+            try:
+                if mesh.users == 0:
+                    bpy.data.meshes.remove(mesh)
+            except ReferenceError:
+                pass
 
     @staticmethod
     def _add_particle_obj(
@@ -307,6 +315,8 @@ class PointCloud(Renderable):
         Args:
             material (Material): target material
         """
+        if material is None:
+            raise ValueError("material must not be None")
         if not isinstance(material, Material):
             assert len(material) == 1, "Only one material can be provided for the point cloud"
             material = material[0]
@@ -340,10 +350,8 @@ class PointCloud(Renderable):
         for particle_obj_name, metadata in self._particle_metadata.items():
             if metadata.material_instance is not None:
                 material_instance = metadata.material_instance
-                material_nodes = material_instance.blender_material.node_tree.nodes
                 blender_material = material_instance.blender_material
-                for material_node in material_nodes:
-                    blender_material.node_tree.nodes.remove(material_node)
+                blender_material.node_tree.nodes.clear()
                 particle_obj = self._blender_object.all_objects[particle_obj_name]
                 particle_obj.data.materials.clear()
                 blender_material.user_clear()
@@ -364,6 +372,8 @@ class PointCloud(Renderable):
         Args:
             colors (Colors): target colors information
         """
+        if colors is None:
+            raise ValueError("colors must not be None")
         if not isinstance(colors, Colors):
             assert len(colors) == 1, "Only one color can be provided for the point cloud"
             colors = colors[0]
@@ -383,6 +393,11 @@ class PointCloud(Renderable):
 
         # Create artificial textures if we have VertexColors
         if self._colors_metadata.type == VertexColors:
+            if len(colors.vertex_colors) != self.num_vertices:
+                raise ValueError(
+                    f"Number of vertex colors ({len(colors.vertex_colors)}) does not match "
+                    f"the number of vertices ({self.num_vertices})"
+                )
             for particle_obj_name, metadata in self._particle_metadata.items():
                 vertex_offset = metadata.vertex_offset
                 vertex_colors_subset = colors.vertex_colors[vertex_offset: vertex_offset + self._max_particles]
@@ -398,7 +413,7 @@ class PointCloud(Renderable):
         """
         for particle_obj_name, metadata in self._particle_metadata.items():
             material_instance = metadata.material_instance
-            if material_instance.colors_node is not None:
+            if material_instance is not None and material_instance.colors_node is not None:
                 blender_material = material_instance.blender_material
                 blender_material.node_tree.nodes.remove(material_instance.colors_node)
                 for extra_node in metadata.extra_color_nodes:
@@ -412,7 +427,7 @@ class PointCloud(Renderable):
                 material_instance.colors_node = None
                 metadata.extra_color_nodes = tuple()
                 metadata.texture_image = None
-                self._colors_metadata = None
+        self._colors_metadata = None
 
     def _blender_create_colors_node(self):
         """Creates color node using previously set builder

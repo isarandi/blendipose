@@ -38,7 +38,6 @@ class Scene(metaclass=Singleton):
         self._camera = None
         self._reset_scene()
         self.tempfile = MemoryTempfile()
-        self._postprocess_fn = lambda x: x
 
     @staticmethod
     def _set_default_blender_parameters():
@@ -84,6 +83,7 @@ class Scene(metaclass=Singleton):
         scene = bpy.data.scenes[0]
         scene.world = bpy.data.worlds.new("BlendifyWorld")
         self._frame_number = 0
+        self._resolution_percentage = 100
         self._set_default_blender_parameters()
         self.renderables._reset()
         self.lights._reset()
@@ -107,7 +107,7 @@ class Scene(metaclass=Singleton):
         near: float = 0.1,
         far: float = 100.0,
         tag: str = "camera",
-        rotation_mode: str = "quaternionWXYZ",
+        rotation_mode: RotationMode = "quaternionWXYZ",
         rotation: RotationParams = None,
         translation: Vector3d = (0, 0, 0),
         resolution_percentage: int = 100,
@@ -120,7 +120,7 @@ class Scene(metaclass=Singleton):
             focal_dist (float, optional): Perspective Camera focal distance in millimeters (default: None)
             fov_x (float, optional): Camera lens horizontal field of view (default: None)
             fov_y (float, optional): Camera lens vertical field of view (default: None)
-            center (Vector2d, optional): (x, y), horizontal and vertical shifts of the Camera (default: None)
+            center (Vector2d, optional): (cx, cy), the principal point in pixels (default: None)
             near (float, optional): Camera near clipping distance (default: 0.1)
             far (float, optional): Camera far clipping distance (default: 100)
             tag (str): name of the created object in Blender
@@ -168,23 +168,26 @@ class Scene(metaclass=Singleton):
         far: float = 100.0,
         tag: str = "camera",
         resolution_percentage: int = 100,
-    ):
-
+    ) -> PerspectiveCamera:
+        fx, fy = intrinsic_matrix[0, 0], intrinsic_matrix[1, 1]
+        if abs(fx - fy) > 1e-6 * fx:
+            raise ValueError(
+                f"Anamorphic intrinsics are not supported (fx={fx}, fy={fy} must be equal)"
+            )
         R = extrinsic_matrix[:3, :3]
         t = -R.T @ extrinsic_matrix[:3, 3]
-        self.set_perspective_camera(
+        return self.set_perspective_camera(
             resolution,
             rotation=R.T * [1, -1, -1],
             rotation_mode="rotmat",
             translation=t,
-            focal_dist=intrinsic_matrix[0, 0],
-            center=intrinsic_matrix[:2, 2] / resolution,
+            focal_dist=fx,
+            center=intrinsic_matrix[:2, 2],
             near=near,
             far=far,
             tag=tag,
             resolution_percentage=resolution_percentage,
         )
-        # self._postprocess_fn = distort_fn
 
     def set_orthographic_camera(
         self,
@@ -193,7 +196,7 @@ class Scene(metaclass=Singleton):
         near: float = 0.1,
         far: float = 100.0,
         tag: str = "camera",
-        rotation_mode: str = "quaternionWXYZ",
+        rotation_mode: RotationMode = "quaternionWXYZ",
         rotation: RotationParams = None,
         translation: Vector3d = (0, 0, 0),
         resolution_percentage: int = 100,
@@ -247,6 +250,7 @@ class Scene(metaclass=Singleton):
         scene = bpy.data.scenes[0]
         scene.render.resolution_x = camera.resolution[0]
         scene.render.resolution_y = camera.resolution[1]
+        self._resolution_percentage = resolution_percentage
         scene.render.resolution_percentage = resolution_percentage
 
     @staticmethod
@@ -261,7 +265,10 @@ class Scene(metaclass=Singleton):
         Returns:
             np.ndarray: distance map in numpy array format
         """
-        data = cv2.imread(path, cv2.IMREAD_UNCHANGED)[:, :, 0]
+        data = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+        if data is None:
+            raise FileNotFoundError(path)
+        data = data[:, :, 0]
         data[data > dist_thresh] = -np.inf
         return data
 
@@ -275,7 +282,10 @@ class Scene(metaclass=Singleton):
         Returns:
             np.ndarray: image in numpy array format
         """
-        return cv2.cvtColor(cv2.imread(path, cv2.IMREAD_UNCHANGED), cv2.COLOR_BGRA2RGBA)
+        image = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+        if image is None:
+            raise FileNotFoundError(path)
+        return cv2.cvtColor(image, cv2.COLOR_BGRA2RGBA)
 
     def render(
         self,
@@ -328,10 +338,10 @@ class Scene(metaclass=Singleton):
         scene = bpy.data.scenes[0]
         scene.render.resolution_x = self.camera.resolution[0]
         scene.render.resolution_y = self.camera.resolution[1]
-        scene.render.resolution_percentage = 100
+        scene.render.resolution_percentage = self._resolution_percentage
 
         if color_dtype not in [np.uint8, np.uint16]:
-            raise ValueError("Invalid rgb_dtype. Must be np.uint8 or np.uint16")
+            raise ValueError("Invalid color_dtype. Must be np.uint8 or np.uint16")
         bpy.context.scene.render.image_settings.color_depth = (
             "8" if color_dtype == np.uint8 else "16"
         )
@@ -343,7 +353,7 @@ class Scene(metaclass=Singleton):
             bpy.context.scene.cycles.use_denoising = True
             try:
                 bpy.context.scene.cycles.denoiser = "OPTIX"
-            except:
+            except Exception:
                 bpy.context.scene.cycles.denoiser = "OPENIMAGEDENOISE"
             bpy.context.scene.view_layers[0].cycles.use_denoising = True
 
@@ -373,8 +383,7 @@ class Scene(metaclass=Singleton):
         bpy.context.scene.view_layers["ViewLayer"].use_pass_z = True
         scene_node_tree = bpy.context.scene.node_tree
 
-        for n in scene_node_tree.nodes:
-            scene_node_tree.nodes.remove(n)
+        scene_node_tree.nodes.clear()
         render_layer = scene_node_tree.nodes.new(type="CompositorNodeRLayers")
         rendered_image = render_layer.outputs["Image"]
 
@@ -442,6 +451,11 @@ class Scene(metaclass=Singleton):
             # Optionally, list the devices before rendering
             # for dev in devices:
             #     print(f"ID:{dev.id} Name:{dev.name} Type:{dev.type} Use:{dev.use}")
+        else:
+            bpy.context.scene.cycles.device = "CPU"
+
+            for scene in bpy.data.scenes:
+                scene.cycles.device = "CPU"
 
         # Render
         bpy.context.scene.frame_current = self._frame_number
@@ -772,13 +786,14 @@ class Scene(metaclass=Singleton):
             # Remove camera from the imported scene
             camera_obj = data_to.scenes[0].camera
 
-            with bpy.context.temp_override(selected_objects=[camera_obj]):
-                bpy.ops.object.delete()
+            if camera_obj is not None:
+                with bpy.context.temp_override(selected_objects=[camera_obj]):
+                    bpy.ops.object.delete()
 
         # Add materials to the current scene
         if len(materials) > 0:
             bpy.ops.wm.append(
-                directory=str(path) + "/Material/", files=materials, link=True
+                directory=str(path) + "/Material/", files=materials, link=False
             )
 
         # Recursively copy collection
@@ -791,14 +806,15 @@ class Scene(metaclass=Singleton):
 
         # Parse selected objects (lights and camera)
         bpy.context.view_layer.update()
-        for obj in bpy.data.objects:
+        for obj in list(bpy.data.objects):
             if with_camera and obj.type == "CAMERA":
                 camera_type, camera_dict = parser.parse_camera_from_blendfile(
                     obj, resolution
                 )
 
                 # Remove current camera, because we need to recreate it
-                bpy.data.cameras.remove(bpy.data.cameras[0])
+                camera_data = obj.data
+                bpy.data.cameras.remove(camera_data)
 
                 if camera_type == "ORTHO":
                     self.set_orthographic_camera(

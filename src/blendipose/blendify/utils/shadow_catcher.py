@@ -16,18 +16,13 @@ def set_shadow_catcher(obj: Union[str, Renderable], state=False):
     if not isinstance(obj, str):
         obj = obj.tag
 
-    # select object
-    bpy.data.objects[obj].select_set(True)
-    bpy.context.view_layer.objects.active = bpy.data.objects[obj]
-    shadow_catcher = bpy.context.active_object
+    shadow_catcher = bpy.data.objects.get(obj)
+    if shadow_catcher is None:
+        raise ValueError(f"No Blender object named '{obj}' exists in the scene")
 
     # set / unset shadow catcher properties
     shadow_catcher.is_shadow_catcher = state
-    shadow_catcher.cycles.is_shadow_catcher = state
     shadow_catcher.visible_glossy = not state
     shadow_catcher.visible_diffuse = not state
     shadow_catcher.visible_transmission = not state
     shadow_catcher.visible_volume_scatter = not state
-
-    # deselect object
-    bpy.data.objects[obj].select_set(False)

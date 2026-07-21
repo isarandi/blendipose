@@ -27,7 +27,7 @@ dependencies = [
     'simplepyutils',
     'framepump',
     'scipy',
-    'bpy==3.6.0',
+    'bpy>=3.6.0,<6.0',
 ]
 
 classifiers = [
@@ -36,6 +36,10 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: POSIX :: Linux"
 ]
+
+[project.optional-dependencies]
+# Needed for save_depth/save_albedo on bpy 5+ (multilayer EXR reading)
+exr = ["OpenEXR"]
 
 [project.urls]
 Homepage = "https://github.com/isarandi/blendipose"

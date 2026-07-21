@@ -15,6 +15,7 @@ import numpy as np
 os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "1"
 import cv2
 
+from . import compat
 from .cameras import PerspectiveCamera, OrthographicCamera
 from .cameras.base import Camera
 from .internal import Singleton
@@ -43,7 +44,7 @@ class Scene(metaclass=Singleton):
     def _set_default_blender_parameters():
         # Setup scene parameters
         scene = bpy.data.scenes[0]
-        scene.use_nodes = True
+        compat.enable_compositor(scene)
         bpy.context.scene.world.use_nodes = False
         bpy.context.scene.render.engine = "CYCLES"
         bpy.context.scene.render.image_settings.color_mode = "RGBA"
@@ -287,6 +288,173 @@ class Scene(metaclass=Singleton):
             raise FileNotFoundError(path)
         return cv2.cvtColor(image, cv2.COLOR_BGRA2RGBA)
 
+    @staticmethod
+    def _read_exr_layers(path: str) -> dict:
+        """Reads a multilayer EXR written by a bpy 5+ compositor file output node.
+
+        Returns a dict mapping layer name to a float32 array: (H, W) for FLOAT layers
+        (stored as a '<name>.V' channel), (H, W, C) for color layers."""
+        try:
+            import OpenEXR
+        except ImportError as e:
+            raise ImportError(
+                "save_depth/save_albedo on bpy 5+ require the OpenEXR package "
+                "(pip install OpenEXR)"
+            ) from e
+        if not os.path.exists(path):
+            raise FileNotFoundError(path)
+        layers = {}
+        with OpenEXR.File(path) as exr_file:
+            for part in exr_file.parts:
+                for channel_name, channel in part.channels.items():
+                    layers[channel_name.split(".")[0]] = np.asarray(channel.pixels)
+        return layers
+
+    @staticmethod
+    def _encode_display_image(linear_rgba: np.ndarray) -> np.ndarray:
+        """Converts a scene-linear float RGBA array to the sRGB-encoded integer image
+        that the pre-bpy-5 PNG file outputs produced (Standard view transform); the
+        output bit depth follows the current render image settings."""
+        rgb = np.clip(linear_rgba[..., :3], 0.0, 1.0)
+        encoded = np.where(
+            rgb <= 0.0031308, rgb * 12.92, 1.055 * rgb ** (1 / 2.4) - 0.055
+        )
+        out = np.concatenate(
+            [encoded, np.clip(linear_rgba[..., 3:4], 0.0, 1.0)], axis=-1
+        )
+        color_depth = bpy.context.scene.render.image_settings.color_depth
+        dtype = np.uint8 if color_depth == "8" else np.uint16
+        return (out * np.iinfo(dtype).max + 0.5).astype(dtype)
+
+    def _render_and_collect_outputs(
+        self,
+        filepath,
+        save_depth,
+        save_albedo,
+        verbose,
+        output_image=None,
+        output_depth=None,
+        output_albedo=None,
+        output_data=None,
+    ):
+        """Runs the configured render and collects its outputs.
+
+        Below bpy 5, color/depth/albedo come from the compositor file output nodes
+        (output_image/output_depth/output_albedo); on 5+ color is written via
+        write_still and data passes come from output_data's multilayer EXR.
+
+        Returns the list [color(, depth)(, albedo)] when rendering to RAM
+        (filepath is None), otherwise writes the files next to filepath and
+        returns None."""
+        scene = bpy.data.scenes[0]
+        render_to_ram = filepath is None
+        with (
+            self.tempfile.TemporaryDirectory() if render_to_ram else nullcontext()
+        ) as tmpdir:
+            if render_to_ram:
+                basepath = tmpdir
+                filename = "result.png"
+                filepath = Path(tmpdir) / filename
+            else:
+                filepath = Path(filepath)
+                basepath = str(filepath.parent.absolute())
+                filename = filepath.stem
+
+            scene.render.filepath = str(basepath)
+
+            frame_str = compat.frame_suffix(self._frame_number)
+            temp_filesuffix = next(tempfile._get_candidate_names())
+            temp_filepath = str(filepath) + "." + temp_filesuffix
+            render_suffixes = [f".color{frame_str}.png"]
+            if compat.HAS_COMPOSITOR_FILE_OUTPUT:
+                if save_depth:
+                    render_suffixes.append(f".depth{frame_str}.exr")
+                if save_albedo:
+                    render_suffixes.append(f".albedo{frame_str}.png")
+            elif save_depth or save_albedo:
+                render_suffixes.append(".data.exr")
+            while self.check_any_exists(temp_filepath, render_suffixes):
+                temp_filesuffix = next(tempfile._get_candidate_names())
+                temp_filepath = str(filepath) + "." + temp_filesuffix
+            temp_filename = os.path.basename(temp_filepath)
+            color_path = temp_filepath + f".color{frame_str}.png"
+            data_path = temp_filepath + ".data.exr"
+
+            if compat.HAS_COMPOSITOR_FILE_OUTPUT:
+                output_image.base_path = basepath
+                output_image.file_slots[0].path = temp_filename + ".color."
+                if save_depth:
+                    output_depth.base_path = basepath
+                    output_depth.file_slots[0].path = temp_filename + ".depth."
+                if save_albedo:
+                    output_albedo.base_path = basepath
+                    output_albedo.file_slots[0].path = temp_filename + ".albedo."
+            else:
+                scene.render.filepath = color_path
+                if output_data is not None:
+                    output_data.directory = basepath
+                    output_data.file_name = temp_filename + ".data"
+
+            with catch_stdout(skip=verbose):
+                bpy.ops.render.render(
+                    write_still=not compat.HAS_COMPOSITOR_FILE_OUTPUT
+                )
+
+            data_layers = None
+            if not compat.HAS_COMPOSITOR_FILE_OUTPUT and (save_depth or save_albedo):
+                data_layers = self._read_exr_layers(data_path)
+
+            def read_distmap():
+                if compat.HAS_COMPOSITOR_FILE_OUTPUT:
+                    return self.read_exr_distmap(
+                        temp_filepath + f".depth{frame_str}.exr",
+                        dist_thresh=self.camera.far * 1.1,
+                    )
+                distmap = data_layers["depth"].copy()
+                distmap[distmap > self.camera.far * 1.1] = -np.inf
+                return distmap
+
+            if render_to_ram:
+                outputs = [self.read_image(color_path)]
+                if save_depth:
+                    outputs.append(self.camera.distance2depth(read_distmap()))
+                if save_albedo:
+                    if compat.HAS_COMPOSITOR_FILE_OUTPUT:
+                        albedomap = self.read_image(
+                            temp_filepath + f".albedo{frame_str}.png"
+                        )
+                    else:
+                        albedomap = self._encode_display_image(data_layers["albedo"])
+                    outputs.append(albedomap)
+            else:
+                shutil.move(color_path, filepath)
+                if compat.HAS_COMPOSITOR_FILE_OUTPUT:
+                    output_image.file_slots[0].path = filename
+                if save_depth:
+                    depthmap = self.camera.distance2depth(read_distmap())
+                    np.save(os.path.splitext(filepath)[0] + ".depth.npy", depthmap)
+                    if compat.HAS_COMPOSITOR_FILE_OUTPUT:
+                        os.remove(temp_filepath + f".depth{frame_str}.exr")
+                        output_depth.file_slots[0].path = filename + ".depth."
+                if save_albedo:
+                    if compat.HAS_COMPOSITOR_FILE_OUTPUT:
+                        shutil.move(
+                            temp_filepath + f".albedo{frame_str}.png",
+                            os.path.splitext(filepath)[0] + ".albedo.png",
+                        )
+                        output_albedo.file_slots[0].path = filename + ".albedo."
+                    else:
+                        albedomap = self._encode_display_image(data_layers["albedo"])
+                        cv2.imwrite(
+                            os.path.splitext(filepath)[0] + ".albedo.png",
+                            cv2.cvtColor(albedomap, cv2.COLOR_RGBA2BGRA),
+                        )
+                if data_layers is not None:
+                    os.remove(data_path)
+                outputs = None
+
+        return outputs
+
     def render(
         self,
         filepath: Union[str, Path] = None,
@@ -381,7 +549,7 @@ class Scene(metaclass=Singleton):
         bpy.context.scene.view_layers["ViewLayer"].use_pass_combined = True
         bpy.context.scene.view_layers["ViewLayer"].use_pass_diffuse_color = True
         bpy.context.scene.view_layers["ViewLayer"].use_pass_z = True
-        scene_node_tree = bpy.context.scene.node_tree
+        scene_node_tree = compat.get_compositor_node_tree(bpy.context.scene)
 
         scene_node_tree.nodes.clear()
         render_layer = scene_node_tree.nodes.new(type="CompositorNodeRLayers")
@@ -394,36 +562,49 @@ class Scene(metaclass=Singleton):
                 use_shadow_catcher = True
                 break
 
-        # create output node
+        bpy.context.view_layer.cycles.use_pass_shadow_catcher = use_shadow_catcher
         if use_shadow_catcher:
-            bpy.context.view_layer.cycles.use_pass_shadow_catcher = True
             alpha_over = scene_node_tree.nodes.new(type="CompositorNodeAlphaOver")
             scene_node_tree.links.new(
                 render_layer.outputs["Shadow Catcher"], alpha_over.inputs[1]
             )
             scene_node_tree.links.new(rendered_image, alpha_over.inputs[2])
-
-            output_image = scene_node_tree.nodes.new(type="CompositorNodeOutputFile")
-            scene_node_tree.links.new(
-                alpha_over.outputs["Image"], output_image.inputs["Image"]
-            )
+            final_image = alpha_over.outputs["Image"]
         else:
-            bpy.context.view_layer.cycles.use_pass_shadow_catcher = False
+            final_image = rendered_image
+
+        output_image = output_depth = output_albedo = output_data = None
+        if compat.HAS_COMPOSITOR_FILE_OUTPUT:
             output_image = scene_node_tree.nodes.new(type="CompositorNodeOutputFile")
-            scene_node_tree.links.new(rendered_image, output_image.inputs["Image"])
+            scene_node_tree.links.new(final_image, output_image.inputs["Image"])
 
-        if save_depth:
-            output_depth = scene_node_tree.nodes.new(type="CompositorNodeOutputFile")
-            output_depth.format.file_format = "OPEN_EXR"
-            scene_node_tree.links.new(
-                render_layer.outputs["Depth"], output_depth.inputs["Image"]
-            )
+            if save_depth:
+                output_depth = scene_node_tree.nodes.new(type="CompositorNodeOutputFile")
+                output_depth.format.file_format = "OPEN_EXR"
+                scene_node_tree.links.new(
+                    render_layer.outputs["Depth"], output_depth.inputs["Image"]
+                )
 
-        if save_albedo:
-            output_albedo = scene_node_tree.nodes.new(type="CompositorNodeOutputFile")
-            scene_node_tree.links.new(
-                render_layer.outputs["DiffCol"], output_albedo.inputs["Image"]
-            )
+            if save_albedo:
+                output_albedo = scene_node_tree.nodes.new(type="CompositorNodeOutputFile")
+                scene_node_tree.links.new(
+                    render_layer.outputs[compat.diffcol_output_name()],
+                    output_albedo.inputs["Image"],
+                )
+        else:
+            compat.set_composite_output(scene_node_tree, final_image)
+            data_layer_spec = {}
+            if save_depth:
+                data_layer_spec["depth"] = (render_layer.outputs["Depth"], "FLOAT")
+            if save_albedo:
+                data_layer_spec["albedo"] = (
+                    render_layer.outputs[compat.diffcol_output_name()],
+                    "RGBA",
+                )
+            if data_layer_spec:
+                output_data = compat.add_data_file_output_node(
+                    scene_node_tree, data_layer_spec
+                )
 
         if use_gpu:
             bpy.context.scene.cycles.device = "GPU"
@@ -459,87 +640,21 @@ class Scene(metaclass=Singleton):
 
         # Render
         bpy.context.scene.frame_current = self._frame_number
-        render_to_ram = filepath is None
-        with (
-            self.tempfile.TemporaryDirectory() if render_to_ram else nullcontext()
-        ) as tmpdir:
-            if render_to_ram:
-                basepath = tmpdir
-                filename = "result.png"
-                filepath = Path(tmpdir) / filename
-            else:
-                filepath = Path(filepath)
-                basepath = str(filepath.parent.absolute())
-                filename = filepath.stem
-
-            scene.render.filepath = str(basepath)
-
-            tempfile.mktemp()
-            temp_filesuffix = next(tempfile._get_candidate_names())
-            temp_filepath = str(filepath) + "." + temp_filesuffix
-            render_suffixes = [f".color.######.png"]
-            if save_depth:
-                render_suffixes.append(f".depth.######.exr")
-            if save_albedo:
-                render_suffixes.append(f".albedo.######.png")
-            while self.check_any_exists(temp_filepath, render_suffixes):
-                temp_filesuffix = next(tempfile._get_candidate_names())
-                temp_filepath = str(filepath) + "." + temp_filesuffix
-            temp_filename = os.path.basename(temp_filepath)
-            output_image.base_path = basepath
-            output_image.file_slots[0].path = temp_filename + ".color."
-            if save_depth:
-                output_depth.file_slots[0].path = temp_filename + ".depth."
-            if save_albedo:
-                output_albedo.file_slots[0].path = temp_filename + ".albedo."
-
-            with catch_stdout(skip=verbose):
-                bpy.ops.render.render(write_still=False)
-
-            if render_to_ram:
-                image_data = self.read_image(
-                    temp_filepath + f".color.{self._frame_number:04d}.png"
-                )
-                outputs = [image_data]
-                if save_depth:
-                    distmap = self.read_exr_distmap(
-                        temp_filepath + f".depth.{self._frame_number:04d}.exr",
-                        dist_thresh=self.camera.far * 1.1,
-                    )
-                    depthmap = self.camera.distance2depth(distmap)
-                    outputs.append(depthmap)
-                if save_albedo:
-                    albedomap = self.read_image(
-                        temp_filepath + f".albedo.{self._frame_number:04d}.png"
-                    )
-                    outputs.append(albedomap)
-            else:
-                shutil.move(
-                    temp_filepath + f".color.{self._frame_number:04d}.png", filepath
-                )
-                output_image.file_slots[0].path = filename
-                if save_depth:
-                    distmap = self.read_exr_distmap(
-                        temp_filepath + f".depth.{self._frame_number:04d}.exr",
-                        dist_thresh=self.camera.far * 1.1,
-                    )
-                    depthmap = self.camera.distance2depth(distmap)
-                    np.save(os.path.splitext(filepath)[0] + ".depth.npy", depthmap)
-                    os.remove(temp_filepath + f".depth.{self._frame_number:04d}.exr")
-                    output_depth.file_slots[0].path = filename + ".depth."
-                if save_albedo:
-                    shutil.move(
-                        temp_filepath + f".albedo.{self._frame_number:04d}.png",
-                        os.path.splitext(filepath)[0] + ".albedo.png",
-                    )
-                    output_albedo.file_slots[0].path = filename + ".albedo."
-                outputs = None
-
-            self._frame_number += 1
-            if outputs is not None and len(outputs) == 1:
-                return outputs[0]
-            else:
-                return outputs
+        outputs = self._render_and_collect_outputs(
+            filepath,
+            save_depth,
+            save_albedo,
+            verbose,
+            output_image=output_image,
+            output_depth=output_depth,
+            output_albedo=output_albedo,
+            output_data=output_data,
+        )
+        self._frame_number += 1
+        if outputs is not None and len(outputs) == 1:
+            return outputs[0]
+        else:
+            return outputs
 
     def preview(
         self,
@@ -571,134 +686,94 @@ class Scene(metaclass=Singleton):
 
         # Switch to OpenGL renderer
         if not fast:
-            bpy.context.scene.render.engine = "BLENDER_EEVEE"
+            bpy.context.scene.render.engine = compat.eevee_engine_name()
         else:
             bpy.context.scene.render.engine = "BLENDER_WORKBENCH"
 
-        if self.camera is None:
-            raise RuntimeError("Can't render without a camera")
+        try:
+            if self.camera is None:
+                raise RuntimeError("Can't render without a camera")
 
-        if frame_number is not None:
-            self._frame_number = frame_number
-        else:
+            if frame_number is not None:
+                self._frame_number = frame_number
+
+            scene = bpy.data.scenes[0]
+            scene.render.resolution_x = self.camera.resolution[0]
+            scene.render.resolution_y = self.camera.resolution[1]
+            scene.render.resolution_percentage = self._resolution_percentage
+
+            bpy.context.scene.camera = self.camera.blender_camera
+            # bpy.context.object.data.dof.focus_object = object
+
+            bpy.context.scene.view_layers["ViewLayer"].use_pass_combined = True
+            bpy.context.scene.view_layers["ViewLayer"].use_pass_diffuse_color = True
+            bpy.context.scene.view_layers["ViewLayer"].use_pass_z = True
+            scene_node_tree = compat.get_compositor_node_tree(bpy.context.scene)
+
+            scene_node_tree.nodes.clear()
+            render_layer = scene_node_tree.nodes.new(type="CompositorNodeRLayers")
+
+            output_image = output_depth = output_albedo = output_data = None
+            if compat.HAS_COMPOSITOR_FILE_OUTPUT:
+                output_image = scene_node_tree.nodes.new(type="CompositorNodeOutputFile")
+                scene_node_tree.links.new(
+                    render_layer.outputs["Image"], output_image.inputs["Image"]
+                )
+
+                if save_depth:
+                    output_depth = scene_node_tree.nodes.new(
+                        type="CompositorNodeOutputFile"
+                    )
+                    output_depth.format.file_format = "OPEN_EXR"
+                    scene_node_tree.links.new(
+                        render_layer.outputs["Depth"], output_depth.inputs["Image"]
+                    )
+
+                if save_albedo:
+                    output_albedo = scene_node_tree.nodes.new(
+                        type="CompositorNodeOutputFile"
+                    )
+                    scene_node_tree.links.new(
+                        render_layer.outputs[compat.diffcol_output_name()],
+                        output_albedo.inputs["Image"],
+                    )
+            else:
+                compat.set_composite_output(
+                    scene_node_tree, render_layer.outputs["Image"]
+                )
+                data_layer_spec = {}
+                if save_depth:
+                    data_layer_spec["depth"] = (render_layer.outputs["Depth"], "FLOAT")
+                if save_albedo:
+                    data_layer_spec["albedo"] = (
+                        render_layer.outputs[compat.diffcol_output_name()],
+                        "RGBA",
+                    )
+                if data_layer_spec:
+                    output_data = compat.add_data_file_output_node(
+                        scene_node_tree, data_layer_spec
+                    )
+
+            # Render
+            bpy.context.scene.frame_current = self._frame_number
+            outputs = self._render_and_collect_outputs(
+                filepath,
+                save_depth,
+                save_albedo,
+                verbose,
+                output_image=output_image,
+                output_depth=output_depth,
+                output_albedo=output_albedo,
+                output_data=output_data,
+            )
             self._frame_number += 1
-
-        scene = bpy.data.scenes[0]
-        scene.render.resolution_x = self.camera.resolution[0]
-        scene.render.resolution_y = self.camera.resolution[1]
-        scene.render.resolution_percentage = 100
-
-        bpy.context.scene.camera = self.camera.blender_camera
-        # bpy.context.object.data.dof.focus_object = object
-
-        bpy.context.scene.view_layers["ViewLayer"].use_pass_combined = True
-        bpy.context.scene.view_layers["ViewLayer"].use_pass_diffuse_color = True
-        bpy.context.scene.view_layers["ViewLayer"].use_pass_z = True
-        scene_node_tree = bpy.context.scene.node_tree
-
-        for n in scene_node_tree.nodes:
-            scene_node_tree.nodes.remove(n)
-        render_layer = scene_node_tree.nodes.new(type="CompositorNodeRLayers")
-        output_image = scene_node_tree.nodes.new(type="CompositorNodeOutputFile")
-        scene_node_tree.links.new(
-            render_layer.outputs["Image"], output_image.inputs["Image"]
-        )
-
-        if save_depth:
-            output_depth = scene_node_tree.nodes.new(type="CompositorNodeOutputFile")
-            output_depth.format.file_format = "OPEN_EXR"
-            scene_node_tree.links.new(
-                render_layer.outputs["Depth"], output_depth.inputs["Image"]
-            )
-
-        if save_albedo:
-            output_albedo = scene_node_tree.nodes.new(type="CompositorNodeOutputFile")
-            scene_node_tree.links.new(
-                render_layer.outputs["DiffCol"], output_albedo.inputs["Image"]
-            )
-
-        # Render
-        bpy.context.scene.frame_current = self._frame_number
-
-        render_to_ram = filepath is None
-        with (
-            self.tempfile.TemporaryDirectory() if render_to_ram else nullcontext()
-        ) as tmpdir:
-            if render_to_ram:
-                basepath = tmpdir
-                filename = "result.png"
-                filepath = Path(tmpdir) / filename
+            if outputs is not None and len(outputs) == 1:
+                return outputs[0]
             else:
-                filepath = Path(filepath)
-                basepath = str(filepath.parent.absolute())
-                filename = filepath.stem
-
-            scene.render.filepath = str(filepath.parent)
-            temp_filesuffix = next(tempfile._get_candidate_names())
-            temp_filepath = str(filepath) + "." + temp_filesuffix
-            render_suffixes = [f".color.{self._frame_number:04d}.png"]
-            if save_depth:
-                render_suffixes.append(f".depth.{self._frame_number:04d}.exr")
-            if save_albedo:
-                render_suffixes.append(f".albedo.{self._frame_number:04d}.png")
-            while self.check_any_exists(temp_filepath, render_suffixes):
-                temp_filesuffix = next(tempfile._get_candidate_names())
-                temp_filepath = str(filepath) + "." + temp_filesuffix
-            temp_filename = os.path.basename(temp_filepath)
-            output_image.base_path = basepath
-            output_image.file_slots[0].path = temp_filename + ".color."
-            if save_depth:
-                output_depth.file_slots[0].path = temp_filename + ".depth."
-            if save_albedo:
-                output_albedo.file_slots[0].path = temp_filename + ".albedo."
-
-            with catch_stdout(skip=verbose):
-                bpy.ops.render.render(write_still=False)
-
-            if render_to_ram:
-                image_data = self.read_image(
-                    temp_filepath + f".color.{self._frame_number:04d}.png"
-                )
-                outputs = [image_data]
-                if save_depth:
-                    distmap = self.read_exr_distmap(
-                        temp_filepath + f".depth.{self._frame_number:04d}.exr",
-                        dist_thresh=self.camera.far * 1.1,
-                    )
-                    depthmap = self.camera.distance2depth(distmap)
-                    outputs.append(depthmap)
-                if save_albedo:
-                    albedomap = self.read_image(
-                        temp_filepath + f".albedo.{self._frame_number:04d}.png"
-                    )
-                    outputs.append(albedomap)
-                if len(outputs) == 1:
-                    return outputs[0]
-                else:
-                    return outputs
-            else:
-                shutil.move(
-                    temp_filepath + f".color.{self._frame_number:04d}.png", filepath
-                )
-                output_image.file_slots[0].path = filename
-                if save_depth:
-                    distmap = self.read_exr_distmap(
-                        temp_filepath + f".depth.{self._frame_number:04d}.exr",
-                        dist_thresh=self.camera.far * 1.1,
-                    )
-                    depthmap = self.camera.distance2depth(distmap)
-                    np.save(os.path.splitext(filepath)[0] + ".depth.npy", depthmap)
-                    os.remove(temp_filepath + f".depth.{self._frame_number:04d}.exr")
-                    output_depth.file_slots[0].path = filename + ".depth."
-                if save_albedo:
-                    shutil.move(
-                        temp_filepath + f".albedo.{self._frame_number:04d}.png",
-                        os.path.splitext(filepath)[0] + ".albedo.png",
-                    )
-                    output_albedo.file_slots[0].path = filename + ".albedo."
-
-        # Return to Cycles renderer
-        bpy.context.scene.render.engine = "CYCLES"
+                return outputs
+        finally:
+            # Return to Cycles renderer
+            bpy.context.scene.render.engine = "CYCLES"
 
     @staticmethod
     def check_any_exists(fileprefix: str, filesuffixes: Sequence[str]) -> bool:

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import shutil
 import sys
@@ -5,7 +7,7 @@ import tempfile
 import warnings
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Union, Sequence
+from typing import Union, Sequence, Optional, TYPE_CHECKING
 
 import bpy
 import numpy as np
@@ -17,12 +19,15 @@ from .cameras import PerspectiveCamera, OrthographicCamera
 from .cameras.base import Camera
 from .internal import Singleton
 from .internal.io import catch_stdout
-from .internal.types import Vector2d, Vector2di, Vector3d, Vector4d, RotationParams
 from .internal import parser
 from .lights import LightsCollection
 from .renderables import RenderablesCollection
 from memory_tempfile import MemoryTempfile
-from typing import Optional
+
+from .internal.types import RotationMode
+
+if TYPE_CHECKING:
+    from .internal.types import Vector2d, Vector2di, Vector3d, Vector4d, RotationParams
 
 
 class Scene(metaclass=Singleton):

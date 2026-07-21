@@ -1,11 +1,17 @@
+from __future__ import annotations
+
 from abc import abstractmethod
+from typing import TYPE_CHECKING
 
 import bpy
 import numpy as np
 from scipy.spatial import transform
 
 from ..internal.positionable import Positionable
-from ..internal.types import Vector2di
+from ..internal.types import RotationMode
+
+if TYPE_CHECKING:
+    from ..internal.types import Vector2di, Vector3d, RotationParams
 
 
 class Camera(Positionable):

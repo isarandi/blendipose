@@ -1,14 +1,22 @@
+from __future__ import annotations
+
 from abc import abstractmethod
-from typing import Optional, List, Union
+from typing import TYPE_CHECKING, Optional, List, Union
 
 import bpy
 import warnings
 
 from ..colors import UniformColors, VertexColors
-from ..colors.base import ColorsMetadata, ColorsList, Colors
+from ..colors.base import ColorsMetadata, Colors
 from ..colors.texture import TextureColors, FileTextureColors, VideoFileTextureColors, TextureColorsViaTempFile
 from ..internal.positionable import Positionable
-from ..materials.base import MaterialList, MaterialInstance, Material
+from ..internal.types import RotationMode
+from ..materials.base import MaterialInstance, Material
+
+if TYPE_CHECKING:
+    from ..colors.base import ColorsList
+    from ..internal.types import BlenderGroup, Vector3d, RotationParams
+    from ..materials.base import MaterialList
 
 
 class Renderable(Positionable):

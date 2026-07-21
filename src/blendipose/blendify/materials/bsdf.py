@@ -1,5 +1,3 @@
-from typing import Tuple
-
 import bpy
 
 from .base import Material, material_property, MaterialInstance

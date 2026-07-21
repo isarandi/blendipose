@@ -1,8 +1,14 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import numpy as np
-from typing import Union
 
 from .base import ColorsMetadata, Colors
-from ..internal.types import Vector3d, Vector4d
+
+if TYPE_CHECKING:
+    from typing import Union
+    from ..internal.types import Vector3d, Vector4d
 
 
 class VertexColors(Colors):

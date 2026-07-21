@@ -1,5 +1,3 @@
-from typing import Tuple
-
 import bpy
 
 from .base import Material, MaterialInstance
@@ -38,7 +36,6 @@ class EmissionMaterial(Material):
 
         emission_node = material_nodes.new("ShaderNodeEmission")
         emission_node.inputs['Strength'].default_value = 10.0
-
         mix_node = material_nodes.new(type='ShaderNodeMixShader')
         mix_node.inputs['Fac'].default_value = 0
 

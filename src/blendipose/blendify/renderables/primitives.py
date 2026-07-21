@@ -1,5 +1,7 @@
+from __future__ import annotations
+
 from abc import abstractmethod
-from typing import Sequence, Union
+from typing import TYPE_CHECKING, Sequence, Union
 
 import bmesh
 import bpy
@@ -7,9 +9,15 @@ import numpy as np
 
 from .base import RenderableObject
 from ..colors import UniformColors
-from ..colors.base import ColorsList, Colors
-from ..internal.types import Vector3d
-from ..materials.base import Material, MaterialList
+from ..colors.base import Colors
+from ..internal.types import FillType, RotationMode
+from ..materials.base import Material
+
+if TYPE_CHECKING:
+    from typing import Union
+    from ..colors.base import ColorsList
+    from ..internal.types import Vector3d, RotationParams
+    from ..materials.base import MaterialList
 
 
 # =================================================== Mesh Primitives ==================================================

@@ -1,6 +1,6 @@
-import math
-from collections import defaultdict
+from __future__ import annotations
 
+import math
 import bpy
 import numpy as np
 from scipy.spatial.transform import Rotation

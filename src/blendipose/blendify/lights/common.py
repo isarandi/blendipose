@@ -1,5 +1,12 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from .base import Light
-from ..internal.types import Vector3d
+from ..internal.types import RotationMode
+
+if TYPE_CHECKING:
+    from ..internal.types import Vector3d, RotationParams
 
 
 class PointLight(Light):

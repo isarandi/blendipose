@@ -1,7 +1,14 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import numpy as np
 
 from .base import Camera
-from ..internal.types import Vector2d
+from ..internal.types import RotationMode
+
+if TYPE_CHECKING:
+    from ..internal.types import Vector2d, Vector2di, Vector3d, RotationParams
 
 
 class PerspectiveCamera(Camera):

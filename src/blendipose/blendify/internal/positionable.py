@@ -1,10 +1,16 @@
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
 
 import bpy
 import numpy as np
 from scipy.spatial.transform import Rotation
 
-from ..internal.types import BlenderGroup, Vector3d, Vector4d, RotationParams
+from ..internal.types import RotationMode
+
+if TYPE_CHECKING:
+    from ..internal.types import BlenderGroup, Vector3d, Vector4d, RotationParams
 
 
 class Positionable(ABC):

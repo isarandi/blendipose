@@ -1,4 +1,6 @@
-from typing import Dict, Iterable, Union, Sequence
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Dict, Iterable, Union, Sequence
 
 import numpy as np
 
@@ -7,10 +9,16 @@ from .base import Renderable
 from .mesh import Mesh
 from .pointcloud import PointCloud
 from ..colors import UniformColors
-from ..colors.base import Colors, ColorsList
+from ..colors.base import Colors
 from ..internal import Singleton
-from ..internal.types import Vector3d, RotationParams
-from ..materials.base import Material, MaterialList
+from ..materials.base import Material
+
+from ..internal.types import RotationMode, FillType, BasePrimitive
+
+if TYPE_CHECKING:
+    from ..colors.base import ColorsList
+    from ..internal.types import Vector3d, RotationParams
+    from ..materials.base import MaterialList
 
 
 class RenderablesCollection(metaclass=Singleton):

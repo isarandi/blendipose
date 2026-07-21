@@ -1,8 +1,13 @@
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
-from typing import Sequence, Union, Dict, Optional
+from typing import TYPE_CHECKING, Sequence, Union, Dict, Optional
 from dataclasses import dataclass
 
 import bpy
+
+if TYPE_CHECKING:
+    MaterialList = Sequence[Material]
 
 
 @dataclass
@@ -19,9 +24,6 @@ class Material(ABC):
     @abstractmethod
     def create_material(self, name: str = "object_material") -> MaterialInstance:
         pass
-
-
-MaterialList = Sequence[Material]
 
 
 def material_property(name: str):

@@ -1,9 +1,13 @@
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
-from typing import NamedTuple, Optional, Union, Sequence
+from typing import TYPE_CHECKING, NamedTuple, Optional, Union, Sequence
 
 import bpy
 
-from ..internal.types import Vector3d
+if TYPE_CHECKING:
+    from ..internal.types import Vector3d
+    ColorsList = Sequence[Colors]
 
 
 class ColorsMetadata(NamedTuple):
@@ -31,6 +35,3 @@ class Colors(ABC):
     @property
     def metadata(self) -> ColorsMetadata:
         return self._metadata
-
-
-ColorsList = Sequence[Colors]

@@ -22,9 +22,11 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
+from __future__ import annotations
+
 import warnings
 from dataclasses import dataclass
-from typing import List, Optional, Dict, Tuple
+from typing import List, Optional, Dict, Tuple, TYPE_CHECKING
 
 import bpy
 import numpy as np
@@ -34,7 +36,11 @@ from .base import Renderable
 from ..colors import VertexColors, UniformColors
 from ..colors.base import ColorsMetadata, Colors
 from ..internal.texture import compute_particle_color_texture
+from ..internal.types import BasePrimitive, RotationMode
 from ..materials.base import Material, MaterialInstance
+
+if TYPE_CHECKING:
+    from ..internal.types import Vector3d, RotationParams
 
 
 @ dataclass

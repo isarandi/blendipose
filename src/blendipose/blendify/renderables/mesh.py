@@ -1,4 +1,6 @@
-from typing import Sequence
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Sequence
 
 import bmesh
 import bpy
@@ -6,8 +8,15 @@ import numpy as np
 import itertools
 from .base import RenderableObject
 from ..colors import VertexColors, UniformColors
+from ..internal.types import RotationMode
 from ..colors.base import ColorsList
 from ..colors.texture import VertexUV, FacesUV, UVColors
+if TYPE_CHECKING:
+    from typing import Union
+    from ..colors.base import Colors, ColorsList
+    from ..internal.types import Vector3d, RotationParams
+    from ..materials.base import MaterialList
+
 from ..materials.base import Material
 
 

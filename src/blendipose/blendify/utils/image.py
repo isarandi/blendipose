@@ -1,6 +1,11 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import numpy as np
 
-from ..internal.types import Vector3d
+if TYPE_CHECKING:
+    from ..internal.types import Vector3d
 
 
 def blend_with_background(img: np.ndarray, bkg_color: Vector3d = (1., 1., 1.)) -> np.ndarray:

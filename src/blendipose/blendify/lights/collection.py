@@ -1,4 +1,6 @@
-from typing import Dict, Iterable, Union
+from __future__ import annotations
+
+from typing import Dict, Iterable, Union, TYPE_CHECKING
 
 import bpy
 import numpy as np
@@ -7,7 +9,11 @@ from .base import Light
 from .common import PointLight, DirectionalLight, SpotLight
 from .area import AreaLight, SquareAreaLight, CircleAreaLight, RectangleAreaLight, EllipseAreaLight
 from ..internal import Singleton
-from ..internal.types import Vector2d, Vector3d, RotationParams
+
+from ..internal.types import RotationMode, AreaLightShape
+
+if TYPE_CHECKING:
+    from ..internal.types import Vector2d, Vector3d, RotationParams
 
 
 class LightsCollection(metaclass=Singleton):

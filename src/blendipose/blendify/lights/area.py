@@ -1,9 +1,15 @@
+from __future__ import annotations
+
 from abc import abstractmethod
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from .base import Light
-from ..internal.types import Vector3d, Vector2d
+from ..internal.types import RotationMode
+
+if TYPE_CHECKING:
+    from ..internal.types import Vector3d, Vector2d, RotationParams
 
 
 class AreaLight(Light):

@@ -5,6 +5,8 @@ import bpy
 import numpy as np
 from scipy.spatial.transform import Rotation
 
+from ..compat import get_light_cast_shadow
+
 
 def move_collection(parent, collection):
     # from https://blender.stackexchange.com/questions/157828/how-to-duplicate-a-certain-collection-using-python
@@ -115,7 +117,7 @@ def parse_light_from_blendfile(obj: bpy.types.Object):
     light_dict = {
         "strength": obj.data.energy,
         "color": np.array(obj.data.color),
-        "cast_shadows": obj.data.cycles.cast_shadow,
+        "cast_shadows": get_light_cast_shadow(obj.data),
         "rotation": quaternion,
         "translation": translation,
         "tag": obj.name

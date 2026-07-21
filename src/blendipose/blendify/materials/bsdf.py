@@ -1,7 +1,8 @@
 import bpy
 
-from .base import Material, material_property, MaterialInstance
+from .base import Material, MaterialInstance
 from .wireframe import WireframeMaterial
+from ..compat import bsdf_socket_name, bsdf_socket_value, bsdf_property_mapping
 
 
 class PrincipledBSDFMaterial(Material):
@@ -16,17 +17,10 @@ class PrincipledBSDFMaterial(Material):
             emission_strength=0.0, alpha=1.0, base_color=(0,0,0,1), use_backface_culling=True, use_colors_for_emission=False
     ):
         super().__init__(use_backface_culling=use_backface_culling)
-        self._property2blender_mapping = {
-            "metallic": "Metallic", "specular": "Specular", "specular_tint": "Specular Tint", "roughness": "Roughness",
-            "anisotropic": "Anisotropic", "anisotropic_rotation": "Anisotropic Rotation", "sheen": "Sheen",
-            "sheen_tint": "Sheen Tint", "clearcoat": "Clearcoat", "clearcoat_roughness": "Clearcoat Roughness",
-            "ior": "IOR", "transmission": "Transmission", "transmission_roughness": "Transmission Roughness",
-            "emission": "Emission", "emission_strength": "Emission Strength", "alpha": "Alpha", "base_color": "Base Color"
-        }
+        self._property2blender_mapping = bsdf_property_mapping()
         for argname, argvalue in locals().items():
             if argname in self._property2blender_mapping.keys():
-                self.__setattr__(argname, material_property(argname))
-                self.__setattr__("_" + argname, argvalue)
+                self.__setattr__("_" + argname, bsdf_socket_value(argname, argvalue))
 
         self._use_colors_for_emission = use_colors_for_emission
 
@@ -46,10 +40,11 @@ class PrincipledBSDFMaterial(Material):
         object_material.use_backface_culling = self._use_backface_culling
         bsdf_node = object_material.node_tree.nodes["Principled BSDF"]
 
-        color_inp_key = "Emission" if self._use_colors_for_emission else "Base Color"
+        emission_key = bsdf_socket_name("Emission")
+        color_inp_key = emission_key if self._use_colors_for_emission else "Base Color"
         material_instance = MaterialInstance(blender_material=object_material,
                                              inputs={"Color": bsdf_node.inputs[color_inp_key], "Alpha": bsdf_node.inputs["Alpha"],
-                                                     "Emission": bsdf_node.inputs["Emission"],
+                                                     "Emission": bsdf_node.inputs[emission_key],
                                                      "Emission Strength": bsdf_node.inputs["Emission Strength"]})
 
         # Set material properties
@@ -66,7 +61,7 @@ class GlossyBSDFMaterial(Material):
 
     def __init__(self, roughness=0.4, distribution="GGX", use_backface_culling=True):
         super().__init__(use_backface_culling=use_backface_culling)
-        self.roughness, self._roughness = material_property("roughness"), roughness
+        self._roughness = roughness
         self._distribution = distribution
 
     def create_material(self, name: str = "object_material") -> MaterialInstance:
@@ -105,11 +100,24 @@ class GlossyBSDFMaterial(Material):
 
 class PrincipledBSDFWireframeMaterial(WireframeMaterial, PrincipledBSDFMaterial):
     def __init__(
-            self, wireframe_thickness=0.01, wireframe_color=(0., 0., 0., 1.), **kwargs
+            self, wireframe_thickness=0.01, wireframe_color=(0., 0., 0., 1.),
+            metallic=0.0, specular=0.3, specular_tint=0.0, roughness=0.4, anisotropic=0.0,
+            anisotropic_rotation=0.0, sheen=0.0, sheen_tint=0.5, clearcoat=0.0, clearcoat_roughness=0.0,
+            ior=1.45, transmission=0.0, transmission_roughness=0.0, emission=(0, 0, 0, 0),
+            emission_strength=0.0, alpha=1.0, base_color=(0, 0, 0, 1), use_backface_culling=True,
+            use_colors_for_emission=False,
     ):
-        super().__init__(
-            wireframe_thickness=wireframe_thickness, wireframe_color=wireframe_color, **kwargs
+        PrincipledBSDFMaterial.__init__(
+            self, metallic=metallic, specular=specular, specular_tint=specular_tint,
+            roughness=roughness, anisotropic=anisotropic, anisotropic_rotation=anisotropic_rotation,
+            sheen=sheen, sheen_tint=sheen_tint, clearcoat=clearcoat,
+            clearcoat_roughness=clearcoat_roughness, ior=ior, transmission=transmission,
+            transmission_roughness=transmission_roughness, emission=emission,
+            emission_strength=emission_strength, alpha=alpha, base_color=base_color,
+            use_backface_culling=use_backface_culling, use_colors_for_emission=use_colors_for_emission,
         )
+        self._wireframe_thickness = wireframe_thickness
+        self._wireframe_color = wireframe_color
 
     def create_material(self, name: str = "object_material") -> MaterialInstance:
         object_material = bpy.data.materials.new(name=name)
@@ -128,12 +136,14 @@ class PrincipledBSDFWireframeMaterial(WireframeMaterial, PrincipledBSDFMaterial)
         self.overlay_wireframe(object_material, bsdf_node)
 
         # Create internal representation
+        emission_key = bsdf_socket_name("Emission")
+        color_inp_key = emission_key if self._use_colors_for_emission else "Base Color"
         material_instance = MaterialInstance(
             blender_material=object_material,
             inputs={
-                "Color": bsdf_node.inputs["Base Color"],
+                "Color": bsdf_node.inputs[color_inp_key],
                 "Alpha": bsdf_node.inputs["Alpha"],
-                "Emission": bsdf_node.inputs["Emission"],
+                "Emission": bsdf_node.inputs[emission_key],
                 "Emission Strength": bsdf_node.inputs["Emission Strength"]
             }
         )

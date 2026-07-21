@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 import bpy
 import numpy as np
 
+from ..compat import get_light_cast_shadow, set_light_cast_shadow
 from ..internal.positionable import Positionable
 from ..internal.types import RotationMode
 
@@ -66,11 +67,11 @@ class Light(Positionable):
 
     @property
     def cast_shadows(self) -> bool:
-        return self.blender_light.data.cycles.cast_shadow
+        return get_light_cast_shadow(self.blender_light.data)
 
     @cast_shadows.setter
     def cast_shadows(self, val: bool):
-        self.blender_light.data.cycles.cast_shadow = val
+        set_light_cast_shadow(self.blender_light.data, val)
 
     @property
     def strength(self) -> float:
